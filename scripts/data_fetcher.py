@@ -236,7 +236,7 @@ class DataFetcher:
                         logging.error("验证码已通过但仍停留在登录页面。")
             else:
                 logging.error("点击验证码识别在所有重试后均失败。")
-        return self._fallback_login(driver)
+        return self._fallback_login(driver, error)
 
     def _get_error_message(self, driver, path) -> Optional[str]:
         """获取错误信息，如果不存在则返回 None"""
@@ -250,14 +250,14 @@ class DataFetcher:
         finally:
             driver.implicitly_wait(self.DRIVER_IMPLICITY_WAIT_TIME)  # 恢复隐式等待
 
-    def _fallback_login(self, driver) -> bool:
+    def _fallback_login(self, driver, reason: str) -> bool:
         """使用备用方案登录"""
         fallback = os.getenv("LOGIN_FALLBACK")
         if fallback == 'qrcode':
-            return self._qr_login(driver)
+            return self._qr_login(driver, reason)
         return False
 
-    def _qr_login(self, driver) -> bool:
+    def _qr_login(self, driver, reason: str) -> bool:
         logging.info("二维码登录开始")
         # 切换验证码
         element = WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(
@@ -286,7 +286,7 @@ class DataFetcher:
 
         from notify import UrlLoginQrCodeNotify
         notifyFunc = UrlLoginQrCodeNotify()
-        notifyFunc(img_screenshot)
+        notifyFunc(img_screenshot, reason)
         for i in range(1, self.QR_CODE_LOGIN_WAIT_COUNT + 1):
             logging.info(f'二维码登录等待检查[{self.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT}] 次数[{i}]')
             time.sleep(self.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT)
