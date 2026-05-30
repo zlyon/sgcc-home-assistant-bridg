@@ -113,11 +113,31 @@ class DataFetcher:
             chrome_options.add_argument("--headless=new")
             chrome_options.binary_location = "/usr/bin/chromium"
             service = ChromeService(executable_path="/usr/bin/chromedriver")
+            def _setting_driver(driver):
+                # 显式设置窗口大小（解决无头模式下 --window-size 不生效的问题）
+                width, height = map(int, window_size.split(','))
+                driver.set_window_size(width, height)
+                try:
+                    driver.execute_cdp_cmd('Emulation.setDeviceMetricsOverride', {
+                        "width": width,
+                        "height": height,
+                        "deviceScaleFactor": int(device_scale),
+                        "mobile": False,
+                        "dontSetVisibleSize": False
+                    })
+                except Exception as e:
+                    logging.warning(f"CDP 设置 viewport 失败: {e}")
+                
         else:
             service = self._find_chromedriver()
+            def _setting_driver(driver):
+                driver.maximize_window()
 
         driver = webdriver.Chrome(options=chrome_options, service=service)
         driver.implicitly_wait(self.DRIVER_IMPLICITY_WAIT_TIME)
+        
+        _setting_driver(driver)
+        
         return driver
 
     @staticmethod
@@ -221,22 +241,28 @@ class DataFetcher:
                 logging.info("无需验证码登录成功 (已被重定向)。\r")
                 return True
 
-            # 处理腾讯点击验证码
-            captcha_passed = solve_captcha_in_browser(driver, max_retries=self.RETRY_TIMES_LIMIT)
-            if captcha_passed:
-                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-                if driver.current_url != LOGIN_URL:
-                    logging.info("通过点击验证码登录成功。\r")
-                    return True
+            # 会出现点击登录直接失败（账号被限制登录）
+            error = self._get_error_message(driver, "//div[@class='errmsg-tip']//span")
+            if error is None:
+                # 处理腾讯点击验证码
+                captcha_passed = solve_captcha_in_browser(driver, max_retries=self.RETRY_TIMES_LIMIT)
+                if captcha_passed:
+                    time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+                    if driver.current_url != LOGIN_URL:
+                        logging.info("通过点击验证码登录成功。\r")
+                        return True
+                    else:
+                        error = self._get_error_message(driver, "//div[@class='errmsg-tip']//span")
+                        if error:
+                            logging.info(f"验证码通过但登录失败: [{error}]\r")
+                        else:
+                            logging.error("验证码已通过但仍停留在登录页面。")
                 else:
                     error = self._get_error_message(driver, "//div[@class='errmsg-tip']//span")
-                    if error:
-                        logging.info(f"验证码通过但登录失败: [{error}]\r")
-                    else:
-                        logging.error("验证码已通过但仍停留在登录页面。")
+                    logging.error("点击验证码识别在所有重试后均失败。")
             else:
-                logging.error("点击验证码识别在所有重试后均失败。")
-        return self._fallback_login(driver)
+                logging.error(f"登录失败: [{error}]\r")    
+        return self._fallback_login(driver, error)
 
     def _get_error_message(self, driver, path) -> Optional[str]:
         """获取错误信息，如果不存在则返回 None"""
@@ -250,14 +276,14 @@ class DataFetcher:
         finally:
             driver.implicitly_wait(self.DRIVER_IMPLICITY_WAIT_TIME)  # 恢复隐式等待
 
-    def _fallback_login(self, driver) -> bool:
+    def _fallback_login(self, driver, reason: str) -> bool:
         """使用备用方案登录"""
         fallback = os.getenv("LOGIN_FALLBACK")
         if fallback == 'qrcode':
-            return self._qr_login(driver)
+            return self._qr_login(driver, reason)
         return False
 
-    def _qr_login(self, driver) -> bool:
+    def _qr_login(self, driver, reason: str) -> bool:
         logging.info("二维码登录开始")
         # 切换验证码
         element = WebDriverWait(driver, self.DRIVER_IMPLICITY_WAIT_TIME).until(
@@ -286,7 +312,7 @@ class DataFetcher:
 
         from notify import UrlLoginQrCodeNotify
         notifyFunc = UrlLoginQrCodeNotify()
-        notifyFunc(img_screenshot)
+        notifyFunc(img_screenshot, reason)
         for i in range(1, self.QR_CODE_LOGIN_WAIT_COUNT + 1):
             logging.info(f'二维码登录等待检查[{self.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT}] 次数[{i}]')
             time.sleep(self.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT)
@@ -316,7 +342,6 @@ class DataFetcher:
         driver = self._get_webdriver()
         ErrorWatcher.instance().set_driver(driver)
 
-        driver.maximize_window()
         self._random_delay(1, 3)
         logging.info("浏览器驱动已初始化。")
         updator = SensorUpdator()

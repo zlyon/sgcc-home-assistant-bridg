@@ -39,14 +39,14 @@ class UrlPushNotify(typ.NamedTuple):
 
 class UrlLoginQrCodeNotify(typ.NamedTuple):
 
-    def __call__(self, qrcode) -> bool:
+    def __call__(self, qrcode, reason: str) -> bool:
         url = os.getenv("PUSH_QRCODE_URL")
 
         if url:
             files = {
                 'file': ("qrcode.png", io.BytesIO(qrcode), 'image/png')
             }
-            resp = requests.post(url, files=files)
+            resp = requests.post(url, files=files, data={"reason": reason})
             logging.info("推送二维码到URL")
             return resp.status_code == 200
         return False
