@@ -63,6 +63,36 @@ return Array.from(document.querySelectorAll('*'))
 """
 
 
+STORE_SNAPSHOT_SCRIPT = """
+const clone = (value) => {
+  try { return JSON.parse(JSON.stringify(value)); } catch (e) { return null; }
+};
+const root = Array.from(document.querySelectorAll('*'))
+  .map((el) => el.__vue__)
+  .find((vm) => vm && vm.$store);
+if (!root || !root.$store) {
+  return { state: {}, getters: {}, url: location.href, route: null };
+}
+return {
+  state: clone(root.$store.state) || {},
+  getters: clone(root.$store.getters) || {},
+  url: location.href,
+  route: root.$route ? clone(root.$route) : null
+};
+"""
+
+
+def selected_store_snapshot(driver) -> dict[str, Any]:
+    """读取当前页面根 Vue 实例的 Vuex state/getters 快照。"""
+    return driver.execute_script(STORE_SNAPSHOT_SCRIPT) or {"state": {}, "getters": {}}
+
+
+def selected_store_state(driver) -> dict[str, Any]:
+    """仅读取当前页面 Vuex $store.state，供只需要 state 的调用方使用。"""
+    snapshot = selected_store_snapshot(driver)
+    return snapshot.get("state") or {}
+
+
 def selected_vue_data(driver) -> list[dict[str, Any]]:
     """执行JS脚本，从当前页面提取Vue状态数据。"""
     return driver.execute_script(SELECTED_VUE_DATA_SCRIPT) or []
