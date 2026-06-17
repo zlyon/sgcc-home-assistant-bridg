@@ -69,8 +69,8 @@ def main():
     next_run_time = parsed_time + timedelta(hours=12)
 
     logging.info(f'立即执行任务！下次运行时间为每天 {parsed_time.strftime("%H:%M")} 和 {next_run_time.strftime("%H:%M")}')
-    schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher)
-    schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher)
+    schedule.every().day.at(parsed_time.strftime("%H:%M")).do(run_task, fetcher, "schedule")
+    schedule.every().day.at(next_run_time.strftime("%H:%M")).do(run_task, fetcher, "schedule")
 
     # 每5分钟重发一次数据，防止HA重启后数据丢失
     # 如果缓存数据日期与当前日期不一致，则从国家电网重新获取数据
@@ -80,7 +80,7 @@ def main():
     # 如果缓存恢复成功，则跳过本次启动时的实时抓取，避免频繁重启导致账号被封
     if not updator.republish():
         logging.info("未找到有效缓存，正在从国家电网获取数据...")
-        run_task(fetcher)
+        run_task(fetcher, "startup")
     else:
         logging.info("已从缓存恢复数据，跳过启动时抓取以保护账号。")
 
@@ -92,16 +92,19 @@ def main():
 def republish_or_fetch(updator: SensorUpdator, fetcher: DataFetcher):
     if not updator.republish():
         logging.info("缓存数据已过期或不存在，正在从国家电网获取数据...")
-        run_task(fetcher)
+        run_task(fetcher, "schedule")
 
 
-def run_task(data_fetcher: DataFetcher):
+def run_task(data_fetcher: DataFetcher, trigger_type: str = "manual"):
     for retry_times in range(1, RETRY_TIMES_LIMIT + 1):
         try:
-            data_fetcher.fetch()
+            current_trigger_type = trigger_type if retry_times == 1 else "retry"
+            result = data_fetcher.fetch(trigger_type=current_trigger_type)
+            if result == "skipped_busy":
+                return
             return
         except Exception as e:
-            logging.error(f"状态刷新任务失败，原因是 [{e}]，还剩 {RETRY_TIMES_LIMIT - retry_times} 次重试机会。")
+            logging.error(f"状态刷新任务失败，原因是 [{data_fetcher._redact_text(e)}]，还剩 {RETRY_TIMES_LIMIT - retry_times} 次重试机会。")
             continue
 
 def logger_init(level: str):

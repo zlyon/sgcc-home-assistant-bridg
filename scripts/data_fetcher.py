@@ -3,6 +3,7 @@ import os
 import re
 import time
 import json
+import threading
 
 import random
 import base64
@@ -17,12 +18,42 @@ from selenium.common.exceptions import TimeoutException
 from sensor_updator import SensorUpdator
 from error_watcher import ErrorWatcher
 from typing import Optional
+from model import AccountData, FetchRun, SessionCheck, mask_account_no
+from scraper import Scraper, redact_account_data
+from store import Store
 
 from const import *
 
 import numpy as np
 from captcha_selenium import solve_captcha_in_browser
 import vue_state
+
+_FETCH_LOCK = threading.Lock()
+
+class _AccountNoRedactionFilter(logging.Filter):
+    def filter(self, record):
+        try:
+            message = record.getMessage()
+            record.msg = re.sub(
+                r"(?<!\d)(\d{13})(?!\d)",
+                lambda m: mask_account_no(m.group(1)),
+                message,
+            )
+            record.args = ()
+        except Exception:
+            pass
+        return True
+
+_ACCOUNT_REDACTION_FILTER = _AccountNoRedactionFilter()
+
+def _install_account_log_redaction() -> None:
+    root = logging.getLogger()
+    if _ACCOUNT_REDACTION_FILTER not in root.filters:
+        root.addFilter(_ACCOUNT_REDACTION_FILTER)
+    for handler in root.handlers:
+        if _ACCOUNT_REDACTION_FILTER not in handler.filters:
+            handler.addFilter(_ACCOUNT_REDACTION_FILTER)
+
 
 class DataFetcher:
 
@@ -438,75 +469,290 @@ class DataFetcher:
         time.sleep(delay)
 
 
-    def fetch(self):
+    def fetch(self, trigger_type: str = "manual"):
 
-        """主逻辑"""
+        """主逻辑：登录链路保持原样，数据抓取切换到 Path B + Store。"""
 
-        driver = self._get_webdriver()
-        ErrorWatcher.instance().set_driver(driver)
+        _install_account_log_redaction()
 
-        self._random_delay(1, 3)
-        logging.info("浏览器驱动已初始化。")
-        updator = SensorUpdator()
+        if not _FETCH_LOCK.acquire(blocking=False):
+            self._record_skipped_busy_run(trigger_type)
+            logging.info("已有抓取任务正在运行，本次 fetch 标记为 skipped_busy 后跳过。")
+            return "skipped_busy"
 
+        driver = None
+        store = None
+        run_id = None
+        session_status_before = "unknown"
+        session_status_after = "unknown"
         try:
-            if os.getenv("DEBUG_MODE", "false").lower() == "true":
-                if self._login(driver,phone_code=True):
-                    logging.info("登录成功!")
-                else:
-                    logging.info("登录失败!")
-                    raise Exception("login unsuccessed")
-            else:
-                if self._login(driver):
-                    logging.info("登录成功!")
-                else:
-                    logging.info("登录失败!")
-                    raise Exception("login unsuccessed")
-        except Exception as e:
-            logging.error(
-                f"浏览器驱动异常退出，原因: {e}。还剩 {self.RETRY_TIMES_LIMIT} 次重试机会。")
-            driver.quit()
-            return
+            store = Store()
+            run_id = store.start_run(FetchRun(
+                trigger_type=trigger_type,
+                started_at=self._now_iso(),
+            ))
 
-        logging.info(f"在 {LOGIN_URL} 登录成功")
-        self._random_delay(1, 3)
-        # self._random_mouse_move(driver)
-        logging.info(f"尝试获取用户 ID 列表")
-        user_id_list = self._get_user_ids(driver)
-        logging.info(f"共找到 {len(user_id_list)} 个用户 ID: {user_id_list}；忽略列表: {self.IGNORE_USER_ID}")
-        self._random_delay(0.5, 2)
+            driver = self._get_webdriver()
+            ErrorWatcher.instance().set_driver(driver)
 
+            self._random_delay(1, 3)
+            logging.info("浏览器驱动已初始化。")
+            updator = SensorUpdator()
 
-        for userid_index, user_id in enumerate(user_id_list):
+            before_check = self._session_check(driver, "before_login")
+            session_status_before = before_check.status
+            store.record_session_check(before_check)
+
             try:
-                self._random_delay(1, 3)
-                # 切换到电费余额页面
-                self._safe_get(driver, BALANCE_URL, "电费余额页面", fast=True)
-                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-                self._choose_current_userid(driver,userid_index)
-                time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
-                current_userid = self._get_current_userid(driver)
-                if current_userid in self.IGNORE_USER_ID:
-                    logging.info(f"用户 ID {current_userid} 将被忽略")
-                    continue
+                if os.getenv("DEBUG_MODE", "false").lower() == "true":
+                    if self._login(driver, phone_code=True):
+                        logging.info("登录成功!")
+                    else:
+                        logging.info("登录失败!")
+                        raise Exception("login unsuccessed")
                 else:
-                    ### 获取数据
-                    balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage, tou_data, enhanced_balance = self._get_all_data(driver, user_id, userid_index)
-                    logging.info(f"用户 [{user_id}] 数据获取完成: 余额={balance}元, 最近日用电={last_daily_usage}度({last_daily_date}), "
-                                 f"年度用电={yearly_usage}度, 年度电费={yearly_charge}元, 月用电={month_usage}度, 月电费={month_charge}元")
-                    updator.update_one_userid(user_id, balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage, tou_data=tou_data, enhanced_balance=enhanced_balance)
-
-                    time.sleep(self.RETRY_WAIT_TIME_OFFSET_UNIT)
+                    if self._login(driver):
+                        logging.info("登录成功!")
+                    else:
+                        logging.info("登录失败!")
+                        raise Exception("login unsuccessed")
             except Exception as e:
-                if (userid_index != len(user_id_list)):
-                    logging.info(f"当前用户 {user_id} 数据抓取失败: {e}，将继续抓取下一个用户数据。")
-                else:
-                    logging.info(f"用户 {user_id} 数据抓取失败: {e}")
-                    logging.info("数据抓取完成后浏览器驱动退出。")
-                continue
+                logging.error(
+                    f"浏览器驱动异常，原因: {self._redact_text(e)}。还剩 {self.RETRY_TIMES_LIMIT} 次重试机会。")
+                raise
 
-        driver.quit()
+            logging.info(f"在 {LOGIN_URL} 登录成功")
+            after_login_check = self._session_check(driver, "after_login")
+            store.record_session_check(after_login_check)
+            session_status_after = after_login_check.status
 
+            if after_login_check.status != "authenticated":
+                raise Exception(f"session not authenticated after login: {after_login_check.status}")
+
+            self._random_delay(1, 3)
+            logging.info("开始使用 Path B 从 Vue/Vuex 状态抓取账户数据。")
+            account_data_list = Scraper(driver).fetch_all()
+            if not account_data_list:
+                raise Exception("Path B 未抓取到任何账户数据")
+
+            saved_count = 0
+            for account_data in account_data_list:
+                user_id = account_data.account.account_no
+                masked_user_id = mask_account_no(user_id)
+                if not user_id:
+                    logging.warning("Path B 返回了缺少户号的账户数据，已跳过。")
+                    continue
+                if user_id in self.IGNORE_USER_ID:
+                    logging.info(f"用户 ID {masked_user_id} 将被忽略")
+                    continue
+
+                store.save_account_data(account_data, run_id)
+                saved_count += 1
+                logging.info(f"用户 [{masked_user_id}] Path B 数据已写入 Store: {self._account_data_summary(account_data)}")
+                logging.debug(f"用户 [{masked_user_id}] Path B 脱敏数据: {redact_account_data(account_data)}")
+
+                update_args = self._account_data_to_update_args(account_data)
+                logging.info(
+                    f"用户 [{masked_user_id}] 数据获取完成: 余额={update_args['balance']}元, "
+                    f"最近日用电={update_args['last_daily_usage']}度({update_args['last_daily_date']}), "
+                    f"年度用电={update_args['yearly_usage']}度, 年度电费={update_args['yearly_charge']}元, "
+                    f"月用电={update_args['month_usage']}度, 月电费={update_args['month_charge']}元")
+                updator.update_one_userid(**update_args)
+
+            if saved_count == 0:
+                raise Exception("Path B 抓取结果均为空或被忽略，未写入任何账户数据")
+
+            final_check = self._session_check(driver, "after_fetch")
+            store.record_session_check(final_check)
+            session_status_after = final_check.status
+            store.finish_run(
+                run_id,
+                "success",
+                session_status_before=session_status_before,
+                session_status_after=session_status_after,
+            )
+            logging.info(f"抓取运行 {run_id} 完成: success, 账户数={saved_count}, 会话={session_status_after}")
+            return "success"
+        except Exception as e:
+            if driver is not None and store is not None:
+                try:
+                    failed_check = self._session_check(driver, "failed")
+                    store.record_session_check(failed_check)
+                    session_status_after = failed_check.status
+                except Exception:
+                    pass
+            if store is not None and run_id is not None:
+                try:
+                    store.finish_run(
+                        run_id,
+                        "failed",
+                        session_status_before=session_status_before,
+                        session_status_after=session_status_after,
+                        error_type=type(e).__name__,
+                        error_message_redacted=self._redact_text(e),
+                    )
+                except Exception as finish_error:
+                    logging.warning(f"记录 fetch run 失败状态失败: {self._redact_text(finish_error)}")
+            raise
+        finally:
+            if driver is not None:
+                self._release_driver(driver)
+            if store is not None:
+                try:
+                    store.close()
+                except Exception:
+                    pass
+            _FETCH_LOCK.release()
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now().astimezone().isoformat()
+
+    @staticmethod
+    def _redact_text(value) -> str:
+        text = str(value)
+        return re.sub(r"(?<!\d)(\d{13})(?!\d)", lambda m: mask_account_no(m.group(1)), text)
+
+    @staticmethod
+    def _redact_url(url: str) -> str:
+        if not url:
+            return ""
+        return re.sub(r"(?<!\d)(\d{13})(?!\d)", lambda m: mask_account_no(m.group(1)), url.split("?", 1)[0])
+
+    @staticmethod
+    def _attach_existing_browser_enabled() -> bool:
+        real_browser = os.getenv("SGCC_REAL_BROWSER", "false").lower() in ("1", "true", "yes", "on")
+        return real_browser and ('PYTHON_IN_DOCKER' in os.environ)
+
+    def _release_driver(self, driver) -> None:
+        if self._attach_existing_browser_enabled():
+            logging.info("当前为持久 Chromium attach 模式，跳过 driver.quit()，保留登录会话。")
+            return
+        try:
+            driver.quit()
+            logging.info("数据抓取完成后浏览器驱动退出。")
+        except Exception as e:
+            logging.warning(f"浏览器驱动退出失败: {self._redact_text(e)}")
+
+    def _record_skipped_busy_run(self, trigger_type: str) -> None:
+        try:
+            with Store() as store:
+                now = self._now_iso()
+                store.start_run(FetchRun(
+                    trigger_type=trigger_type,
+                    status="skipped_busy",
+                    started_at=now,
+                    finished_at=now,
+                    session_status_before="unknown",
+                    session_status_after="unknown",
+                ))
+        except Exception as e:
+            logging.warning(f"记录 skipped_busy fetch run 失败: {self._redact_text(e)}")
+
+    def _session_check(self, driver, check_method: str) -> SessionCheck:
+        current_url = ""
+        try:
+            current_url = driver.current_url or ""
+        except Exception:
+            current_url = ""
+        redirected_to_login = "/osgweb/login" in current_url
+        try:
+            authenticated = self._is_logged_in_page(driver)
+        except Exception:
+            authenticated = False
+        if authenticated:
+            status = "authenticated"
+        elif redirected_to_login:
+            status = "expired"
+        else:
+            status = "unknown"
+        safe_url = self._redact_url(current_url)
+        return SessionCheck(
+            checked_at=self._now_iso(),
+            status=status,
+            current_url=safe_url,
+            check_method=check_method,
+            redirected_to_login=redirected_to_login,
+            evidence_redacted=f"url={safe_url}",
+        )
+
+    @staticmethod
+    def _latest_daily(account_data: AccountData):
+        rows = [row for row in account_data.daily if row.date]
+        return max(rows, key=lambda row: row.date) if rows else None
+
+    @staticmethod
+    def _latest_monthly(account_data: AccountData):
+        rows = [row for row in account_data.monthly if row.year_month]
+        return max(rows, key=lambda row: row.year_month) if rows else None
+
+    @staticmethod
+    def _account_data_summary(account_data: AccountData) -> str:
+        return (
+            f"balance={'yes' if account_data.balance else 'no'}, "
+            f"daily={len(account_data.daily)}, monthly={len(account_data.monthly)}, "
+            f"yearly={'yes' if account_data.yearly else 'no'}"
+        )
+
+    def _account_data_to_update_args(self, account_data: AccountData) -> dict:
+        user_id = account_data.account.account_no
+        balance_model = account_data.balance
+        yearly = account_data.yearly
+        latest_month = self._latest_monthly(account_data)
+        latest_day = self._latest_daily(account_data)
+
+        balance = None
+        enhanced_balance = None
+        if balance_model is not None:
+            balance = balance_model.balance_cny
+            if balance is None:
+                balance = balance_model.prepay_balance_cny
+            if balance_model.arrears_cny is not None:
+                enhanced_balance = {
+                    "as_of": balance_model.observed_at,
+                    "amount_due": balance_model.arrears_cny,
+                    "user_id": user_id,
+                }
+
+        tou_daily = []
+        for row in account_data.daily:
+            tou_daily.append({
+                "date": row.date,
+                "total_usage": row.total_usage_kwh,
+                "valley_usage": row.valley_usage_kwh,
+                "flat_usage": row.flat_usage_kwh,
+                "peak_usage": row.peak_usage_kwh,
+                "tip_usage": row.tip_usage_kwh,
+            })
+        tou_data = {
+            "year": yearly.year if yearly else "",
+            "yearly_usage": yearly.total_usage_kwh if yearly else None,
+            "yearly_charge": yearly.total_charge_cny if yearly else None,
+            "months": [
+                {
+                    "month": row.year_month,
+                    "usage": row.total_usage_kwh,
+                    "charge": row.total_charge_cny,
+                    "begin_date": row.begin_date,
+                    "end_date": row.end_date,
+                }
+                for row in account_data.monthly
+            ],
+            "daily": tou_daily,
+        } if tou_daily else None
+
+        return {
+            "user_id": user_id,
+            "balance": balance,
+            "last_daily_date": latest_day.date if latest_day else None,
+            "last_daily_usage": latest_day.total_usage_kwh if latest_day else None,
+            "yearly_charge": yearly.total_charge_cny if yearly else None,
+            "yearly_usage": yearly.total_usage_kwh if yearly else None,
+            "month_charge": latest_month.total_charge_cny if latest_month else None,
+            "month_usage": latest_month.total_usage_kwh if latest_month else None,
+            "tou_data": tou_data,
+            "enhanced_balance": enhanced_balance,
+        }
 
     def _get_current_userid(self, driver) -> str:
         """读取当前页面的用户户号（兼容多种页面布局）"""
