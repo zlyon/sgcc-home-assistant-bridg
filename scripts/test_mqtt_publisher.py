@@ -156,6 +156,47 @@ class MqttPublisherTestCase(unittest.TestCase):
             "total_increasing",
         )
 
+        history_topic = "homeassistant/sensor/sgcc_xxxxxxxxx0123/history/config"
+        self.assertIn(history_topic, config_messages)
+        history_payload = config_messages[history_topic]
+        self.assertEqual(history_payload["object_id"], "sgcc_0123_history")
+        self.assertEqual(history_payload["json_attributes_topic"], "sgcc/sgcc_xxxxxxxxx0123/history/attributes")
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/history/state"], f"{current_month}-18 d2 m1")
+        history_attrs = json.loads(
+            state_messages.get("sgcc/sgcc_xxxxxxxxx0123/history/attributes")
+            or next(payload for topic, payload, _ in client.published if topic == "sgcc/sgcc_xxxxxxxxx0123/history/attributes")
+        )
+        self.assertEqual(history_attrs["daily_count"], 2)
+        self.assertEqual(history_attrs["monthly_count"], 1)
+        self.assertEqual(history_attrs["daily"][0]["valley_kwh"], 1.0)
+        self.assertEqual(history_attrs["daily"][1]["peak_kwh"], 3.5)
+
+    def test_publish_account_data_emits_discovery_when_values_are_missing(self):
+        account_no = "1234567890123"
+        cfg = FetcherConfig(
+            MQTT_HOST="broker.local",
+            MQTT_DISCOVERY_PREFIX="homeassistant",
+        )
+        publisher = MqttPublisher(cfg)
+        self.assertTrue(publisher.connect())
+
+        data = AccountData(account=Account(account_no=account_no))
+
+        self.assertTrue(publisher.publish_account_data(data))
+        client = FakeClient.instances[-1]
+        config_topics = {topic for topic, payload, retain in client.published if topic.endswith("/config")}
+        state_topics = {topic for topic, payload, retain in client.published if topic.endswith("/state")}
+
+        self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/last_daily_usage/config", config_topics)
+        self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_valley/config", config_topics)
+        self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_flat/config", config_topics)
+        self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_peak/config", config_topics)
+        self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_tip/config", config_topics)
+        self.assertNotIn("sgcc/sgcc_xxxxxxxxx0123/last_daily_usage/state", state_topics)
+        self.assertNotIn("sgcc/sgcc_xxxxxxxxx0123/month_valley/state", state_topics)
+        self.assertIn("sgcc/sgcc_xxxxxxxxx0123/history/state", state_topics)
+
+
 
 if __name__ == "__main__":
     unittest.main()

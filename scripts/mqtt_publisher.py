@@ -86,25 +86,39 @@ class MqttPublisher:
                 "manufacturer": "SGCC bridge",
             }
 
-            published = 0
+            published_configs = 0
+            published_states = 0
+            suffix = account_no[-4:] if account_no else self._safe_topic_part(masked)[-4:]
             for spec in self._sensor_specs(account_data, masked, device):
                 value = spec.pop("value")
-                if value is None:
-                    continue
                 key = spec.pop("key")
+                attributes = spec.pop("attributes", None)
                 state_topic = f"sgcc/{node}/{key}/state"
                 config_topic = f"{self.discovery_prefix}/sensor/{node}/{key}/config"
                 payload = {
                     "name": spec.pop("name"),
                     "unique_id": f"sgcc_{masked}_{key}",
+                    "object_id": f"sgcc_{suffix}_{key}",
                     "state_topic": state_topic,
                     "device": device,
                 }
+                if attributes is not None:
+                    payload["json_attributes_topic"] = f"sgcc/{node}/{key}/attributes"
                 payload.update({k: v for k, v in spec.items() if v is not None})
                 self._publish(config_topic, json.dumps(payload, ensure_ascii=False), retain=True)
-                self._publish(state_topic, self._format_value(value), retain=True)
-                published += 1
-            return published > 0
+                published_configs += 1
+                if attributes is not None:
+                    self._publish(
+                        payload["json_attributes_topic"],
+                        json.dumps(attributes, ensure_ascii=False),
+                        retain=True,
+                    )
+                if value is not None:
+                    self._publish(state_topic, self._format_value(value), retain=True)
+                    published_states += 1
+            if published_configs and not published_states:
+                logging.info("MQTT Discovery 配置已发布，但当前账户数据没有可用状态值。")
+            return published_configs > 0
         except Exception as e:
             logging.warning(f"MQTT 发布失败: {e}")
             return False
@@ -154,6 +168,7 @@ class MqttPublisher:
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
+                "attributes": self._daily_attributes(latest_daily),
             },
             {
                 "key": "month_usage",
@@ -162,6 +177,7 @@ class MqttPublisher:
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
+                "attributes": self._monthly_attributes(latest_monthly),
             },
             {
                 "key": "month_charge",
@@ -170,6 +186,7 @@ class MqttPublisher:
                 "unit_of_measurement": "CNY",
                 "device_class": "monetary",
                 "state_class": "measurement",
+                "attributes": self._monthly_attributes(latest_monthly),
             },
             {
                 "key": "month_valley",
@@ -178,6 +195,7 @@ class MqttPublisher:
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
+                "attributes": self._tou_attributes(account_data.daily),
             },
             {
                 "key": "month_flat",
@@ -186,6 +204,7 @@ class MqttPublisher:
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
+                "attributes": self._tou_attributes(account_data.daily),
             },
             {
                 "key": "month_peak",
@@ -194,6 +213,7 @@ class MqttPublisher:
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
+                "attributes": self._tou_attributes(account_data.daily),
             },
             {
                 "key": "month_tip",
@@ -202,6 +222,7 @@ class MqttPublisher:
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
+                "attributes": self._tou_attributes(account_data.daily),
             },
             {
                 "key": "year_usage",
@@ -219,7 +240,95 @@ class MqttPublisher:
                 "device_class": "monetary",
                 "state_class": "total_increasing",
             },
+            {
+                "key": "history",
+                "name": f"历史数据 {masked}",
+                "value": self._history_state(account_data),
+                "icon": "mdi:history",
+                "attributes": self._history_attributes(account_data),
+            },
         ]
+
+
+    @staticmethod
+    def _daily_attributes(row: Optional[DailyReading]) -> dict[str, Any]:
+        return {
+            "date": row.date if row else None,
+            "valley_kwh": row.valley_usage_kwh if row else None,
+            "flat_kwh": row.flat_usage_kwh if row else None,
+            "peak_kwh": row.peak_usage_kwh if row else None,
+            "tip_kwh": row.tip_usage_kwh if row else None,
+        }
+
+    @staticmethod
+    def _monthly_attributes(row: Optional[MonthlyReading]) -> dict[str, Any]:
+        return {
+            "month": row.year_month if row else None,
+            "begin_date": row.begin_date if row else None,
+            "end_date": row.end_date if row else None,
+        }
+
+    @staticmethod
+    def _tou_attributes(rows: list[DailyReading]) -> dict[str, Any]:
+        current_month_prefix = datetime.now().strftime("%Y-%m")
+        current_rows = [row for row in rows if str(row.date or "")[:7] == current_month_prefix]
+        return {
+            "month": current_month_prefix,
+            "daily_count": len(current_rows),
+            "source": "daily_readings_current_month",
+        }
+
+    @staticmethod
+    def _history_state(account_data: AccountData) -> str:
+        daily_count = len(account_data.daily)
+        monthly_count = len(account_data.monthly)
+        latest_daily = MqttPublisher._latest_daily(account_data.daily)
+        latest_monthly = MqttPublisher._latest_monthly(account_data.monthly)
+        if latest_daily and latest_daily.date:
+            latest = latest_daily.date
+        elif latest_monthly and latest_monthly.year_month:
+            latest = latest_monthly.year_month
+        elif account_data.yearly and account_data.yearly.year:
+            latest = account_data.yearly.year
+        else:
+            latest = "no-data"
+        return f"{latest} d{daily_count} m{monthly_count}"
+
+    @staticmethod
+    def _history_attributes(account_data: AccountData) -> dict[str, Any]:
+        yearly = account_data.yearly
+        latest_daily = MqttPublisher._latest_daily(account_data.daily)
+        latest_monthly = MqttPublisher._latest_monthly(account_data.monthly)
+        return {
+            "latest_daily_date": latest_daily.date if latest_daily else None,
+            "latest_month": latest_monthly.year_month if latest_monthly else None,
+            "year": yearly.year if yearly else None,
+            "year_usage_kwh": yearly.total_usage_kwh if yearly else None,
+            "year_charge_cny": yearly.total_charge_cny if yearly else None,
+            "monthly_count": len(account_data.monthly),
+            "daily_count": len(account_data.daily),
+            "monthly": [
+                {
+                    "month": row.year_month,
+                    "usage_kwh": row.total_usage_kwh,
+                    "charge_cny": row.total_charge_cny,
+                    "begin_date": row.begin_date,
+                    "end_date": row.end_date,
+                }
+                for row in account_data.monthly
+            ],
+            "daily": [
+                {
+                    "date": row.date,
+                    "usage_kwh": row.total_usage_kwh,
+                    "valley_kwh": row.valley_usage_kwh,
+                    "flat_kwh": row.flat_usage_kwh,
+                    "peak_kwh": row.peak_usage_kwh,
+                    "tip_kwh": row.tip_usage_kwh,
+                }
+                for row in account_data.daily
+            ],
+        }
 
     @staticmethod
     def _latest_daily(rows: list[DailyReading]) -> Optional[DailyReading]:
