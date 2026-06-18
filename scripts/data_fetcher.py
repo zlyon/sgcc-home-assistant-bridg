@@ -10,6 +10,7 @@ from const import LOGIN_URL
 from error_watcher import ErrorWatcher
 from ha_mapping import account_data_summary, account_data_to_update_args
 from login import SgccLogin
+from mqtt_publisher import MqttPublisher
 from model import FetchRun, mask_account_no
 from redact import install_account_log_redaction, mask_secret, now_iso, redact_text
 from scraper import Scraper, redact_account_data
@@ -68,7 +69,13 @@ class DataFetcher:
 
             self._random_delay(1, 3)
             logging.info("浏览器驱动已初始化。")
-            updator = SensorUpdator()
+            publisher = self.config.PUBLISHER
+            if publisher not in {"rest", "mqtt", "both"}:
+                logging.warning(f"未知 PUBLISHER={publisher}，回退为 both。")
+                publisher = "both"
+            updator = SensorUpdator() if publisher in {"rest", "both"} else None
+            mqtt_pub = MqttPublisher(self.config) if publisher in {"mqtt", "both"} else None
+            mqtt_connected = mqtt_pub.connect() if mqtt_pub is not None else False
 
             before_check = check_session(driver, "before_login")
             session_status_before = before_check.status
@@ -129,7 +136,16 @@ class DataFetcher:
                     f"最近日用电={update_args['last_daily_usage']}度({update_args['last_daily_date']}), "
                     f"年度用电={update_args['yearly_usage']}度, 年度电费={update_args['yearly_charge']}元, "
                     f"月用电={update_args['month_usage']}度, 月电费={update_args['month_charge']}元")
-                updator.update_one_userid(**update_args)
+                if updator is not None:
+                    updator.update_one_userid(**update_args)
+                if mqtt_pub is not None:
+                    try:
+                        if not mqtt_connected:
+                            logging.warning(f"用户 [{masked_user_id}] MQTT 未连接，跳过发布。")
+                        elif not mqtt_pub.publish_account_data(account_data):
+                            logging.warning(f"用户 [{masked_user_id}] MQTT 发布失败，已跳过。")
+                    except Exception as mqtt_error:
+                        logging.warning(f"用户 [{masked_user_id}] MQTT 发布异常，已忽略: {redact_text(mqtt_error)}")
 
             if saved_count == 0:
                 raise Exception("Path B 抓取结果均为空或被忽略，未写入任何账户数据")
@@ -169,6 +185,8 @@ class DataFetcher:
         finally:
             if driver is not None:
                 release_driver(driver)
+            if "mqtt_pub" in locals() and mqtt_pub is not None:
+                mqtt_pub.disconnect()
             if store is not None:
                 try:
                     store.close()
