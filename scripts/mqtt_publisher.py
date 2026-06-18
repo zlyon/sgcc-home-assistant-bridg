@@ -247,6 +247,9 @@ class MqttPublisher:
                 "icon": "mdi:history",
                 "attributes": self._history_attributes(account_data),
             },
+            *self._daily_history_sensor_specs(account_data, masked),
+            *self._monthly_history_sensor_specs(account_data, masked),
+            *self._yearly_history_sensor_specs(account_data, masked),
         ]
 
 
@@ -299,9 +302,15 @@ class MqttPublisher:
         yearly = account_data.yearly
         latest_daily = MqttPublisher._latest_daily(account_data.daily)
         latest_monthly = MqttPublisher._latest_monthly(account_data.monthly)
+        daily_dates = sorted(row.date for row in account_data.daily if row.date)
+        monthly_keys = sorted(row.year_month for row in account_data.monthly if row.year_month)
         return {
             "latest_daily_date": latest_daily.date if latest_daily else None,
+            "daily_start_date": daily_dates[0] if daily_dates else None,
+            "daily_end_date": daily_dates[-1] if daily_dates else None,
             "latest_month": latest_monthly.year_month if latest_monthly else None,
+            "monthly_start": monthly_keys[0] if monthly_keys else None,
+            "monthly_end": monthly_keys[-1] if monthly_keys else None,
             "year": yearly.year if yearly else None,
             "year_usage_kwh": yearly.total_usage_kwh if yearly else None,
             "year_charge_cny": yearly.total_charge_cny if yearly else None,
@@ -329,6 +338,77 @@ class MqttPublisher:
                 for row in account_data.daily
             ],
         }
+
+    @staticmethod
+    def _daily_history_sensor_specs(account_data: AccountData, masked: str) -> list[dict[str, Any]]:
+        specs: list[dict[str, Any]] = []
+        rows = sorted(
+            [row for row in account_data.daily if row.date],
+            key=lambda row: row.date,
+            reverse=True,
+        )
+        for row in rows:
+            key_suffix = row.date.replace("-", "")
+            specs.append({
+                "key": f"daily_{key_suffix}",
+                "name": f"日用电 {row.date} {masked}",
+                "value": row.total_usage_kwh,
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "measurement",
+                "attributes": {
+                    "date": row.date,
+                    "valley_kwh": row.valley_usage_kwh,
+                    "flat_kwh": row.flat_usage_kwh,
+                    "peak_kwh": row.peak_usage_kwh,
+                    "tip_kwh": row.tip_usage_kwh,
+                },
+            })
+        return specs
+
+    @staticmethod
+    def _monthly_history_sensor_specs(account_data: AccountData, masked: str) -> list[dict[str, Any]]:
+        specs: list[dict[str, Any]] = []
+        rows = sorted(
+            [row for row in account_data.monthly if row.year_month],
+            key=lambda row: row.year_month,
+            reverse=True,
+        )
+        for row in rows:
+            key_suffix = row.year_month.replace("-", "")
+            specs.append({
+                "key": f"monthly_{key_suffix}",
+                "name": f"月度历史 {row.year_month} {masked}",
+                "value": row.total_usage_kwh,
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "measurement",
+                "attributes": {
+                    "month": row.year_month,
+                    "charge_cny": row.total_charge_cny,
+                    "begin_date": row.begin_date,
+                    "end_date": row.end_date,
+                },
+            })
+        return specs
+
+    @staticmethod
+    def _yearly_history_sensor_specs(account_data: AccountData, masked: str) -> list[dict[str, Any]]:
+        yearly = account_data.yearly
+        if yearly is None or not yearly.year:
+            return []
+        return [{
+            "key": f"year_{yearly.year}",
+            "name": f"年度历史 {yearly.year} {masked}",
+            "value": yearly.total_usage_kwh,
+            "unit_of_measurement": "kWh",
+            "device_class": "energy",
+            "state_class": "total_increasing",
+            "attributes": {
+                "year": yearly.year,
+                "charge_cny": yearly.total_charge_cny,
+            },
+        }]
 
     @staticmethod
     def _latest_daily(rows: list[DailyReading]) -> Optional[DailyReading]:

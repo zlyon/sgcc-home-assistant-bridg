@@ -137,6 +137,17 @@ docker compose logs -f sgcc_electricity_app
 
 户号会在实体名称、unique id 与日志中脱敏，只保留末四位用于区分。
 
+### 5. Lovelace 卡片示例
+
+项目提供了一份 Home Assistant Lovelace 示例卡片：
+
+```text
+examples/lovelace-sgcc-electricity.yaml
+```
+
+它包含概览、近日日用电、月度历史、峰平谷尖和年度统计几组卡片。使用时把示例中的 `4840` 替换成你自己的户号末四位，并按 Home Assistant 实际生成的日期/月度实体调整列表。
+
+
 ## 配置项
 
 | 变量 | 用途 |

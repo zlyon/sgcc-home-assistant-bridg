@@ -1,0 +1,263 @@
+# SGCC Home Assistant Bridge / 国家电网电费 Lovelace 视图示例
+#
+# 用法：
+# 1. Home Assistant → 仪表盘 → 编辑仪表盘 → 添加视图/原始配置。
+# 2. 粘贴本文件内容作为一个 view；如果是在完整 dashboard raw config 中使用，
+#    把本文件整体放到 `views:` 列表的一项里。
+# 3. 把实体 ID 里的 `4840` 替换成你自己的户号末四位。
+# 4. 日/月历史实体按 HA 实际出现的数据范围增删；数据范围以国网页面自然返回为准。
+#
+# 实体分组：
+# - 摘要实体：余额、应交金额、最近日用电、最新月度用电/电费、年度用电/电费。
+# - 独立历史实体：daily_YYYYMMDD / monthly_YYYYMM / year_YYYY，通过 MQTT Discovery
+#   在 HA 中显示为 “日用电 YYYY-MM-DD / 月度历史 YYYY-MM / 年度历史 YYYY”。
+# - 分时实体：当前月已抓到日读数汇总后的谷/平/峰/尖电量。
+# - 曲线示例：下面使用 HACS apexcharts-card 的 data_generator，按“历史数据摘要”
+#   实体属性里的国网日期/月度绘制，而不是按 HA 状态更新时间绘制。
+
+title: 国网电费
+path: sgcc-electricity
+icon: mdi:transmission-tower
+type: sections
+max_columns: 4
+badges: []
+sections:
+  - title: 概览
+    cards:
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_dian_fei_yu_e_4840
+            name: 电费余额
+            icon: mdi:cash
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_ying_jiao_jin_e_4840
+            name: 应交金额
+            icon: mdi:cash-clock
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_zui_jin_ri_yong_dian_4840
+            name: 最近日用电
+            icon: mdi:lightning-bolt
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_yue_du_yong_dian_4840
+            name: 最新月度用电
+            icon: mdi:calendar-month
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_yue_du_dian_fei_4840
+            name: 最新月度电费
+            icon: mdi:cash-multiple
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_nian_du_yong_dian_4840
+            name: 年度用电
+            icon: mdi:chart-timeline-variant
+            tap_action:
+              action: more-info
+
+      - type: entities
+        title: 数据摘要
+        show_header_toggle: false
+        entities:
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 历史数据摘要
+          - entity: sensor.guo_wang_dian_fei_4840_zui_jin_ri_yong_dian_4840
+            name: 最新日读数
+          - entity: sensor.guo_wang_dian_fei_4840_yue_du_yong_dian_4840
+            name: 最新月读数
+          - entity: sensor.guo_wang_dian_fei_4840_nian_du_yong_dian_4840
+            name: 年读数
+
+  - title: 近日日用电
+    cards:
+      - type: entities
+        title: 国网页面返回的日用电
+        show_header_toggle: false
+        entities:
+          - entity: sensor.guo_wang_dian_fei_4840_ri_yong_dian_2026_06_17_4840
+            name: 2026-06-17
+          - entity: sensor.guo_wang_dian_fei_4840_ri_yong_dian_2026_06_16_4840
+            name: 2026-06-16
+          - entity: sensor.guo_wang_dian_fei_4840_ri_yong_dian_2026_06_15_4840
+            name: 2026-06-15
+          - entity: sensor.guo_wang_dian_fei_4840_ri_yong_dian_2026_06_14_4840
+            name: 2026-06-14
+          - entity: sensor.guo_wang_dian_fei_4840_ri_yong_dian_2026_06_13_4840
+            name: 2026-06-13
+          - entity: sensor.guo_wang_dian_fei_4840_ri_yong_dian_2026_06_12_4840
+            name: 2026-06-12
+          - entity: sensor.guo_wang_dian_fei_4840_ri_yong_dian_2026_06_11_4840
+            name: 2026-06-11
+
+  - title: 月度历史
+    cards:
+      - type: entities
+        title: 月度用电
+        show_header_toggle: false
+        entities:
+          - entity: sensor.guo_wang_dian_fei_4840_yue_du_li_shi_2026_05_4840
+            name: 2026-05 用电
+          - entity: sensor.guo_wang_dian_fei_4840_yue_du_li_shi_2026_04_4840
+            name: 2026-04 用电
+          - entity: sensor.guo_wang_dian_fei_4840_yue_du_li_shi_2026_03_4840
+            name: 2026-03 用电
+          - entity: sensor.guo_wang_dian_fei_4840_yue_du_li_shi_2026_02_4840
+            name: 2026-02 用电
+          - entity: sensor.guo_wang_dian_fei_4840_yue_du_li_shi_2026_01_4840
+            name: 2026-01 用电
+
+      - type: entities
+        title: 年度历史
+        show_header_toggle: false
+        entities:
+          - entity: sensor.guo_wang_dian_fei_4840_nian_du_li_shi_2026_4840
+            name: 2026 年用电
+          - entity: sensor.guo_wang_dian_fei_4840_nian_du_dian_fei_4840
+            name: 年度电费
+
+  - title: 峰平谷尖
+    cards:
+      - type: grid
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_yue_du_gu_shi_dian_liang_4840
+            name: 谷时电量
+            icon: mdi:weather-night
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_yue_du_ping_shi_dian_liang_4840
+            name: 平时电量
+            icon: mdi:minus-circle-outline
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_yue_du_feng_shi_dian_liang_4840
+            name: 峰时电量
+            icon: mdi:chart-bell-curve
+            tap_action:
+              action: more-info
+          - type: tile
+            entity: sensor.guo_wang_dian_fei_4840_yue_du_jian_shi_dian_liang_4840
+            name: 尖时电量
+            icon: mdi:flash-triangle
+            tap_action:
+              action: more-info
+
+
+  - title: 历史曲线（可选 ApexCharts）
+    cards:
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: 近日日用电曲线
+        graph_span: 7d
+        span:
+          end: day
+        apex_config:
+          chart:
+            height: 260
+          yaxis:
+            decimalsInFloat: 2
+        series:
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 日用电
+            type: line
+            unit: kWh
+            data_generator: |
+              const rows = entity.attributes.daily || [];
+              return rows
+                .filter((row) => row.date && row.usage_kwh !== undefined)
+                .map((row) => [new Date(row.date).getTime(), Number(row.usage_kwh)]);
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: 峰平谷尖日曲线
+        graph_span: 7d
+        span:
+          end: day
+        apex_config:
+          chart:
+            height: 260
+          yaxis:
+            decimalsInFloat: 2
+        series:
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 谷
+            type: line
+            unit: kWh
+            data_generator: |
+              const rows = entity.attributes.daily || [];
+              return rows.filter((row) => row.date).map((row) => [new Date(row.date).getTime(), Number(row.valley_kwh || 0)]);
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 平
+            type: line
+            unit: kWh
+            data_generator: |
+              const rows = entity.attributes.daily || [];
+              return rows.filter((row) => row.date).map((row) => [new Date(row.date).getTime(), Number(row.flat_kwh || 0)]);
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 峰
+            type: line
+            unit: kWh
+            data_generator: |
+              const rows = entity.attributes.daily || [];
+              return rows.filter((row) => row.date).map((row) => [new Date(row.date).getTime(), Number(row.peak_kwh || 0)]);
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 尖
+            type: line
+            unit: kWh
+            data_generator: |
+              const rows = entity.attributes.daily || [];
+              return rows.filter((row) => row.date).map((row) => [new Date(row.date).getTime(), Number(row.tip_kwh || 0)]);
+
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: 月度用电曲线
+        graph_span: 180d
+        span:
+          end: month
+        apex_config:
+          chart:
+            height: 260
+          yaxis:
+            decimalsInFloat: 2
+        series:
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 月用电
+            type: column
+            unit: kWh
+            data_generator: |
+              const rows = entity.attributes.monthly || [];
+              return rows
+                .filter((row) => row.month && row.usage_kwh !== undefined)
+                .map((row) => [new Date(`${row.month}-01`).getTime(), Number(row.usage_kwh)]);
+
+  - title: 抓取状态
+    cards:
+      - type: entities
+        title: 数据摘要
+        show_header_toggle: false
+        entities:
+          - entity: sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840
+            name: 历史数据摘要
+          - entity: sensor.guo_wang_dian_fei_4840_zui_jin_ri_yong_dian_4840
+            name: 最新日读数
+          - entity: sensor.guo_wang_dian_fei_4840_yue_du_yong_dian_4840
+            name: 最新月读数
+          - entity: sensor.guo_wang_dian_fei_4840_nian_du_yong_dian_4840
+            name: 年读数

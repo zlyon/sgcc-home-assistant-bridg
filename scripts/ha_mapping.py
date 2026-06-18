@@ -11,10 +11,22 @@ def _latest_monthly(account_data: AccountData):
     return max(rows, key=lambda row: row.year_month) if rows else None
 
 
+def _range_text(values: list[str]) -> str:
+    values = sorted(v for v in values if v)
+    if not values:
+        return "-"
+    if len(values) == 1:
+        return values[0]
+    return f"{values[0]}..{values[-1]}"
+
+
 def account_data_summary(account_data: AccountData) -> str:
+    daily_range = _range_text([row.date for row in account_data.daily])
+    monthly_range = _range_text([row.year_month for row in account_data.monthly])
     return (
         f"balance={'yes' if account_data.balance else 'no'}, "
-        f"daily={len(account_data.daily)}, monthly={len(account_data.monthly)}, "
+        f"daily={len(account_data.daily)}({daily_range}), "
+        f"monthly={len(account_data.monthly)}({monthly_range}), "
         f"yearly={'yes' if account_data.yearly else 'no'}"
     )
 

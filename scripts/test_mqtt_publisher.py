@@ -54,7 +54,8 @@ class MqttPublisherTestCase(unittest.TestCase):
         mqtt_publisher.mqtt = self.original_mqtt
 
     def test_publish_account_data_emits_discovery_and_state_without_full_account_no(self):
-        current_month = datetime.now().strftime("%Y-%m")
+        current_month = "2026-06"
+        current_day = "2026-06-18"
         account_no = "1234567890123"
         cfg = FetcherConfig(
             MQTT_HOST="broker.local",
@@ -86,6 +87,16 @@ class MqttPublisherTestCase(unittest.TestCase):
                     year_month=current_month,
                     total_usage_kwh=56.7,
                     total_charge_cny=23.45,
+                    begin_date=f"{current_month}-01",
+                    end_date=f"{current_month}-30",
+                ),
+                MonthlyReading(
+                    account_no=account_no,
+                    year_month="2026-05",
+                    total_usage_kwh=45.6,
+                    total_charge_cny=20.01,
+                    begin_date="2026-05-01",
+                    end_date="2026-05-31",
                 )
             ],
             daily=[
@@ -100,12 +111,21 @@ class MqttPublisherTestCase(unittest.TestCase):
                 ),
                 DailyReading(
                     account_no=account_no,
-                    date=f"{current_month}-18",
+                    date=current_day,
                     total_usage_kwh=7.5,
                     valley_usage_kwh=1.5,
                     flat_usage_kwh=2.5,
                     peak_usage_kwh=3.5,
                     tip_usage_kwh=0.0,
+                ),
+                DailyReading(
+                    account_no=account_no,
+                    date=f"{current_month}-16",
+                    total_usage_kwh=5.5,
+                    valley_usage_kwh=0.5,
+                    flat_usage_kwh=1.5,
+                    peak_usage_kwh=2.5,
+                    tip_usage_kwh=1.0,
                 ),
             ],
         )
@@ -148,7 +168,7 @@ class MqttPublisherTestCase(unittest.TestCase):
         self.assertEqual(month_valley_config["unit_of_measurement"], "kWh")
         self.assertEqual(month_valley_config["device_class"], "energy")
         self.assertEqual(month_valley_config["state_class"], "measurement")
-        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/month_valley/state"], "2.5")
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/month_valley/state"], "3.0")
 
         self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/year_usage/config", config_messages)
         self.assertEqual(
@@ -161,15 +181,68 @@ class MqttPublisherTestCase(unittest.TestCase):
         history_payload = config_messages[history_topic]
         self.assertEqual(history_payload["object_id"], "sgcc_0123_history")
         self.assertEqual(history_payload["json_attributes_topic"], "sgcc/sgcc_xxxxxxxxx0123/history/attributes")
-        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/history/state"], f"{current_month}-18 d2 m1")
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/history/state"], f"{current_day} d3 m2")
         history_attrs = json.loads(
             state_messages.get("sgcc/sgcc_xxxxxxxxx0123/history/attributes")
             or next(payload for topic, payload, _ in client.published if topic == "sgcc/sgcc_xxxxxxxxx0123/history/attributes")
         )
-        self.assertEqual(history_attrs["daily_count"], 2)
-        self.assertEqual(history_attrs["monthly_count"], 1)
+        self.assertEqual(history_attrs["daily_count"], 3)
+        self.assertEqual(history_attrs["daily_start_date"], f"{current_month}-16")
+        self.assertEqual(history_attrs["daily_end_date"], current_day)
+        self.assertEqual(history_attrs["monthly_count"], 2)
+        self.assertEqual(history_attrs["monthly_start"], "2026-05")
+        self.assertEqual(history_attrs["monthly_end"], current_month)
         self.assertEqual(history_attrs["daily"][0]["valley_kwh"], 1.0)
         self.assertEqual(history_attrs["daily"][1]["peak_kwh"], 3.5)
+
+        daily_latest_topic = "homeassistant/sensor/sgcc_xxxxxxxxx0123/daily_20260618/config"
+        monthly_latest_topic = "homeassistant/sensor/sgcc_xxxxxxxxx0123/monthly_202606/config"
+        monthly_prev_topic = "homeassistant/sensor/sgcc_xxxxxxxxx0123/monthly_202605/config"
+        yearly_topic = "homeassistant/sensor/sgcc_xxxxxxxxx0123/year_2026/config"
+
+        self.assertIn(daily_latest_topic, config_messages)
+        self.assertIn(monthly_latest_topic, config_messages)
+        self.assertIn(monthly_prev_topic, config_messages)
+        self.assertIn(yearly_topic, config_messages)
+
+        daily_latest_payload = config_messages[daily_latest_topic]
+        self.assertEqual(daily_latest_payload["name"], f"日用电 {current_day} *********0123")
+        self.assertEqual(daily_latest_payload["state_topic"], "sgcc/sgcc_xxxxxxxxx0123/daily_20260618/state")
+        self.assertEqual(daily_latest_payload["json_attributes_topic"], "sgcc/sgcc_xxxxxxxxx0123/daily_20260618/attributes")
+        self.assertEqual(daily_latest_payload["unit_of_measurement"], "kWh")
+        self.assertEqual(daily_latest_payload["device_class"], "energy")
+        self.assertEqual(daily_latest_payload["state_class"], "measurement")
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/daily_20260618/state"], "7.5")
+        daily_latest_attrs = json.loads(
+            next(payload for topic, payload, _ in client.published if topic == "sgcc/sgcc_xxxxxxxxx0123/daily_20260618/attributes")
+        )
+        self.assertEqual(daily_latest_attrs["date"], current_day)
+        self.assertEqual(daily_latest_attrs["peak_kwh"], 3.5)
+
+        monthly_latest_payload = config_messages[monthly_latest_topic]
+        self.assertEqual(monthly_latest_payload["name"], f"月度历史 {current_month} *********0123")
+        self.assertEqual(monthly_latest_payload["state_topic"], "sgcc/sgcc_xxxxxxxxx0123/monthly_202606/state")
+        self.assertEqual(monthly_latest_payload["json_attributes_topic"], "sgcc/sgcc_xxxxxxxxx0123/monthly_202606/attributes")
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/monthly_202606/state"], "56.7")
+        monthly_latest_attrs = json.loads(
+            next(payload for topic, payload, _ in client.published if topic == "sgcc/sgcc_xxxxxxxxx0123/monthly_202606/attributes")
+        )
+        self.assertEqual(monthly_latest_attrs["month"], current_month)
+        self.assertEqual(monthly_latest_attrs["charge_cny"], 23.45)
+        self.assertEqual(monthly_latest_attrs["begin_date"], f"{current_month}-01")
+        self.assertEqual(monthly_latest_attrs["end_date"], f"{current_month}-30")
+
+        yearly_payload = config_messages[yearly_topic]
+        self.assertEqual(yearly_payload["name"], "年度历史 2026 *********0123")
+        self.assertEqual(yearly_payload["state_topic"], "sgcc/sgcc_xxxxxxxxx0123/year_2026/state")
+        self.assertEqual(yearly_payload["json_attributes_topic"], "sgcc/sgcc_xxxxxxxxx0123/year_2026/attributes")
+        self.assertEqual(yearly_payload["state_class"], "total_increasing")
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/year_2026/state"], "321.0")
+        yearly_attrs = json.loads(
+            next(payload for topic, payload, _ in client.published if topic == "sgcc/sgcc_xxxxxxxxx0123/year_2026/attributes")
+        )
+        self.assertEqual(yearly_attrs["year"], "2026")
+        self.assertEqual(yearly_attrs["charge_cny"], 123.45)
 
     def test_publish_account_data_emits_discovery_when_values_are_missing(self):
         account_no = "1234567890123"
@@ -192,6 +265,9 @@ class MqttPublisherTestCase(unittest.TestCase):
         self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_flat/config", config_topics)
         self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_peak/config", config_topics)
         self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_tip/config", config_topics)
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/daily_20260618/config", config_topics)
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/monthly_202606/config", config_topics)
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/year_2026/config", config_topics)
         self.assertNotIn("sgcc/sgcc_xxxxxxxxx0123/last_daily_usage/state", state_topics)
         self.assertNotIn("sgcc/sgcc_xxxxxxxxx0123/month_valley/state", state_topics)
         self.assertIn("sgcc/sgcc_xxxxxxxxx0123/history/state", state_topics)
