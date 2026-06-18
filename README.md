@@ -1,8 +1,8 @@
 # SGCC Home Assistant Bridge
 
-[![License](https://img.shields.io/github/license/MaribelHearm/sgcc-electricity-arc)](LICENSE)
-[![Release](https://img.shields.io/github/v/tag/MaribelHearm/sgcc-electricity-arc?label=release)](https://github.com/MaribelHearm/sgcc-electricity-arc/tags)
-[![Docker Build Check](https://github.com/MaribelHearm/sgcc-electricity-arc/actions/workflows/docker-image.yml/badge.svg)](https://github.com/MaribelHearm/sgcc-electricity-arc/actions/workflows/docker-image.yml)
+[![License](https://img.shields.io/github/license/MaribelHearm/sgcc-home-assistant-bridg)](LICENSE)
+[![Release](https://img.shields.io/github/v/tag/MaribelHearm/sgcc-home-assistant-bridg?label=release)](https://github.com/MaribelHearm/sgcc-home-assistant-bridg/tags)
+[![Docker Build Check](https://github.com/MaribelHearm/sgcc-home-assistant-bridg/actions/workflows/docker-image.yml/badge.svg)](https://github.com/MaribelHearm/sgcc-home-assistant-bridg/actions/workflows/docker-image.yml)
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-MQTT%20Discovery-41BDF5)](https://www.home-assistant.io/integrations/mqtt/)
 
 Unofficial State Grid / SGCC / 95598 electricity data bridge for Home Assistant, with browser automation, SQLite storage, MQTT Discovery and REST publishing.

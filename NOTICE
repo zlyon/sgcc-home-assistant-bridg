@@ -6,7 +6,7 @@ originally authored by renhai-lab and licensed under the Apache License,
 Version 2.0.
 
 Upstream project: https://github.com/ARC-MX/sgcc_electricity_new
-Derived project: https://github.com/MaribelHearm/sgcc-electricity-arc
+Derived project: https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 
 Major changes in this derived work include:
 - modular refactoring of configuration, redaction, browser, login, session,

@@ -3,7 +3,7 @@
 本项目是国家电网 / SGCC / 95598 电费与用电数据接入 Home Assistant 的非官方桥接 Add-on，基于 [`ARC-MX/sgcc_electricity_new`](https://github.com/ARC-MX/sgcc_electricity_new) 二开，Add-on 仓库地址为：
 
 ```text
-https://github.com/MaribelHearm/sgcc-electricity-arc
+https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 ```
 
 ## 配置和启动
@@ -34,6 +34,6 @@ https://github.com/MaribelHearm/sgcc-electricity-arc
 ## 常见问题
 
 - 如果无法找到新添加的 Add-on，请刷新 Add-on Store。
-- 如果安装失败，检查存储库地址是否为 `https://github.com/MaribelHearm/sgcc-electricity-arc`。
+- 如果安装失败，检查存储库地址是否为 `https://github.com/MaribelHearm/sgcc-home-assistant-bridg`。
 - 如果 MQTT 实体未出现，检查 Home Assistant MQTT 集成是否启用 discovery，以及 `MQTT_DISCOVERY_PREFIX` 是否为 `homeassistant`。
 - 如果验证码失败，检查 LLM 接口是否支持图片输入，且 `.env` / Add-on 配置中的 Key 没有留空。
