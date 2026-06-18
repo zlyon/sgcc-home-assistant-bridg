@@ -9,53 +9,69 @@
 
 本项目基于 [`ARC-MX/sgcc_electricity_new`](https://github.com/ARC-MX/sgcc_electricity_new) 二次开发，原作者为 renhai-lab，原项目采用 Apache-2.0 许可证。感谢原作者和社区为国家电网 Home Assistant 集成方向做出的基础工作。
 
-> 当前版本定位：保留 Home Assistant / Docker 部署外壳，重写核心登录、抓取、解析、SQLite 存储与 MQTT Discovery 发布链路。
+> 当前版本定位：保留上游 Home Assistant / Docker 部署外壳与既有业务覆盖，在账号登录、验证码处理、Vue 状态取数、SQLite 存储和 HA 发布链路上做工程化重构与增强。
 
 ## 为什么做这个版本
 
-国网网页与风控变化后，很多旧方案会遇到扫码依赖、验证码误判、会话失效、历史数据不完整或 Home Assistant 实体恢复不稳定的问题。本版本的目标是：
+上游项目已经具备账号密码登录、LLM 视觉验证码、余额/日/月/年用电、峰平谷尖、Home Assistant REST 传感器和可选 SQLite/MySQL 存储等能力。本版本不是把这些业务维度从零做一遍，而是针对真实运行中遇到的扫码兜底、页面加载、缓存恢复、数据归一和 HA 实体恢复问题，把链路拆开并加固。
 
-- **无人值守**：优先使用账号密码 + 多模态点选验证码，不把扫码当主路径。
-- **数据不缺**：落库日/月/年、余额、峰平谷尖与抓取运行记录，便于补发和恢复。
-- **HA 原生体验**：通过 MQTT Discovery 自动创建设备和实体，同时保留 REST states API 兼容路径。
-- **本地可观测**：SQLite 作为本地事实源，错误现场保存到本机，账号与户号默认脱敏。
+本版本的目标是：
+
+- **减少人工介入**：继续沿用账号密码 + 多模态验证码方向，并把二维码明确为失败兜底，而不是默认主路径。
+- **数据更可恢复**：把上游已有的余额、日/月/年、峰平谷尖等数据统一归一到结构化模型和 SQLite 事实库，便于补发、恢复和排障。
+- **HA 接入更自动**：在原 REST states API 发布基础上增加 MQTT Discovery，让 Home Assistant 自动创建设备和实体。
+- **运行更可观测**：记录抓取 run、会话检查、发布状态和错误现场；账号、户号与敏感字段默认脱敏。
 
 ## 和上游项目的主要区别
 
 | 方向 | 上游项目 | 本项目 |
 | --- | --- | --- |
-| 登录路径 | 旧网页登录/扫码/验证码逻辑 | 真实浏览器账号密码登录，多模态点选验证码，二维码仅兜底 |
-| 抓取方式 | 页面文本、旧逻辑与简单扩展 | Path B：读取 SGCC Vue2/Vuex store 与组件数据 |
-| 存储模型 | 可选 SQLite/MySQL，偏每日用电与 key-value | 规范化 SQLite：账户、余额、日/月/年、运行记录、会话检查、发布状态 |
-| HA 发布 | REST 传感器为主 | MQTT Discovery 为主，REST 兼容 |
-| 数据覆盖 | 近日电量与基础字段 | 日用电、月度、年度、余额、峰/平/谷/尖、历史数据摘要 |
-| 运行方式 | 继承原有 Add-on/Docker 结构 | 每轮 headful Chromium + Xvfb，用完即关，减少会话残留 |
+| 登录路径 | 已有账号密码登录、LLM 视觉验证码和二维码兜底 | 拆出 `login.py` / `browser.py`，增加登录态判定、受控导航、错误现场保存和脱敏日志；二维码仍只作为 fallback |
+| 浏览器运行 | Selenium + Chrome/Chromium，Docker 下偏 headless | Xvfb 下有头 Chromium、持久 profile、页面/脚本超时控制、每轮用完释放 |
+| 抓取方式 | 已有页面取值与 Vue component data / Vue state 辅助解析 | 将 Vue/Vuex 取数主路径化：读取 store snapshot + 组件 data，统一交给 `parser.py` 合并归一 |
+| 数据覆盖 | 已覆盖余额、预付费/欠费、日/月/年用电、月峰/平/谷/尖等 | 不宣称新增这些业务维度；重点是更稳定地归一、去重、落库和重发布 |
+| 存储模型 | 可选 SQLite/MySQL，表结构偏每日用电与 key-value 扩展 | 新增规范化 SQLite fact store：账户、余额、日/月/年、抓取 run、会话检查、发布状态 |
+| HA 发布 | REST states API 传感器为主 | 新增 MQTT Discovery 自动建实体，同时保留 REST 兼容路径 |
+| 缓存恢复 | 有旧缓存/数据库能力 | 增加 SQLite/旧 REST 状态重发布、空缓存判定、retained MQTT state，减少 HA 重启后 `unknown` |
 
 ## 特性
 
-- **每天现登**：按计划使用国网账号密码登录，避免依赖长期在线浏览器会话。
-- **多模态点选验证码**：通过 OpenAI 兼容多模态 LLM 识别腾讯点选验证码坐标；失败时可用二维码扫码兜底。
-- **用完即关 headful Chromium**：每轮任务启动带 Xvfb 的有头 Chromium，抓取完成后关闭，降低常驻浏览器状态残留。
-- **Path B 抓取**：从 SGCC Vue2/Vuex `$store` 与组件 `data` 中读取已解密业务数据，而不是只依赖页面文本或截图。
-- **SQLite 事实源**：抓取结果、运行记录与会话检查写入本地 `/data/sgcc.sqlite3`，便于追踪和恢复。
-- **MQTT Discovery + REST 双通道**：优先通过 Home Assistant MQTT Discovery 自动创建设备和实体，同时保留 REST 发布兼容路径。
+- **账号密码主路径加固**：沿用上游账号密码 + LLM 视觉验证码方向，补充登录态判定、受控导航、错误现场保存和二维码 fallback 边界。
+- **有头 Chromium 运行形态**：每轮任务在 Xvfb 下启动有头 Chromium，支持持久 profile、页面/脚本超时控制，抓取完成后释放 driver。
+- **Path B 主路径化**：把上游已有的 Vue state/component data 取数能力整理为 `Scraper` + `Parser` 主链路，读取 SGCC Vue2/Vuex `$store` 与组件 `data` 中的业务数据。
+- **统一数据模型**：用 `AccountData` 聚合账户、余额、日/月/年读数和峰平谷尖数据，减少散落 dict 与重复解析。
+- **规范化 SQLite 事实源**：将抓取结果、运行记录、会话检查与发布状态写入 `/data/sgcc.sqlite3`，比上游每日表/key-value 存储更适合恢复和排障。
+- **MQTT Discovery + REST 双通道**：新增 Home Assistant MQTT Discovery 自动创建设备和实体，同时保留上游 REST states API 兼容路径。
+- **缓存与重发布增强**：启动时优先从 SQLite、旧缓存或旧 REST 状态恢复发布，跳过空缓存，减少 HA 重启后实体缺值。
 
 ## 架构概览
 
 ```text
 schedule / startup
-  -> account login (password + Tencent click captcha via multimodal LLM)
-  -> fallback qrcode login when configured
+  -> account login/session check
+       password + Tencent click captcha via multimodal LLM
+       qrcode fallback only when configured/needed
   -> per-run headful Chromium under Xvfb
-  -> Path B scraper (Vuex $store + component data)
+  -> Path B scraper
+       Vuex $store snapshot + component data
   -> parser / normalized AccountData model
-  -> SQLite /data/sgcc.sqlite3
+  -> SQLite /data/sgcc.sqlite3 fact store
+       data + fetch runs + session checks + publisher state
   -> Home Assistant publisher
-       -> MQTT Discovery device/entities
-       -> REST states API compatibility
+       MQTT Discovery device/entities
+       REST states API compatibility
 ```
 
 主要模块包括：`config`、`redact`、`browser`、`login`、`session`、`scraper`、`parser`、`store`、`model`、`ha_mapping`、`sensor_updator`、`mqtt_publisher`、`captcha_selenium`、`click_captcha_solver`。
+
+## 继承与重构边界
+
+为避免误解，这里明确一下边界：
+
+- 上游已经支持账号密码登录、LLM 视觉验证码、二维码兜底、Vue state 辅助取数、余额、日/月/年用电、峰平谷尖、REST 传感器和可选 SQLite/MySQL。
+- 本项目的主要价值不是“首次支持这些电力业务字段”，而是把这些能力拆成更清晰的浏览器、登录、抓取、解析、存储和发布模块。
+- 当前版本新增或显著增强的是：Vue/Vuex Path B 主链路、统一 `AccountData` 模型、规范化 SQLite fact store、MQTT Discovery 发布、启动重发布/缓存恢复、错误现场与脱敏观测。
+
 
 ## 快速开始
 
