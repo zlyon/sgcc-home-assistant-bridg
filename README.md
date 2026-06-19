@@ -108,6 +108,8 @@ $EDITOR .env
 - `HASS_URL`、`HASS_TOKEN`：REST 发布使用。
 - `MQTT_HOST`、`MQTT_PORT`、`MQTT_USERNAME`、`MQTT_PASSWORD`：MQTT Discovery 发布使用。
 
+LLM 调用保持 OpenAI 兼容接口，不绑定具体供应商。火山方舟/豆包方案可以沿用上游配置思路：`LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3`，`LLM_API_KEY` 填 Ark API Key，`LLM_MODEL` 建议填你在方舟控制台创建的接入点 ID（通常是 `ep-...`）。为了方便从上游迁移，也兼容 `ARK_API_KEY`、`ARK_MODEL`、`ARK_BASE_URL` 这些别名；同时存在时 `LLM_*` 优先。
+
 请不要把真实 `.env`、Home Assistant Token、国网密码或 LLM API Key 提交到仓库。
 
 ### 3. 构建并启动
@@ -187,9 +189,9 @@ examples/lovelace-sgcc-electricity.yaml
 | `HASS_TOKEN` | Home Assistant 长期访问令牌，REST 发布使用。 |
 | `JOB_START_TIME` | 每日抓取开始时间，格式 `HH:MM`。 |
 | `RETRY_TIMES_LIMIT` | 登录、验证码或抓取失败时的重试次数上限。 |
-| `LLM_API_KEY` | OpenAI 兼容多模态接口 Key。 |
-| `LLM_BASE_URL` | OpenAI 兼容接口 Base URL。 |
-| `LLM_MODEL` | 用于验证码识别的多模态模型名称。 |
+| `LLM_API_KEY` | OpenAI 兼容多模态接口 Key；也兼容 `ARK_API_KEY` 别名。 |
+| `LLM_BASE_URL` | OpenAI 兼容接口 Base URL；也兼容 `ARK_BASE_URL` 别名。 |
+| `LLM_MODEL` | 用于验证码识别的多模态模型名称或接入点 ID；也兼容 `ARK_MODEL` 别名。 |
 | `LOGIN_FALLBACK` | 登录失败兜底方式；`qrcode` 表示二维码人工扫码。 |
 | `PUBLISHER` | 发布方式：`mqtt`、`rest`、`both`。 |
 | `MQTT_HOST` | MQTT broker 地址。 |

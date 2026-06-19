@@ -1,5 +1,7 @@
 import os
 
+from llm_config import load_llm_config
+
 # 国网电力官网
 LOGIN_URL = "https://95598.cn/osgweb/login"
 ELECTRIC_USAGE_URL = "https://95598.cn/osgweb/electricityCharge"
@@ -28,9 +30,10 @@ PREPAY_BALANCE_SENSOR_NAME = "sensor.prepay_balance"
 BALANCE_UNIT = "CNY"
 USAGE_UNIT = "KWH"
 
-LLM_API_KEY = os.getenv('LLM_API_KEY', '').strip()
-LLM_BASE_URL = os.getenv('LLM_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3')
-LLM_MODEL = os.getenv('LLM_MODEL', 'doubao-seed-2-0-pro-260215')
+_LLM_CONFIG = load_llm_config()
+LLM_API_KEY = _LLM_CONFIG.api_key
+LLM_BASE_URL = _LLM_CONFIG.base_url
+LLM_MODEL = _LLM_CONFIG.model
 
 
 def get_data_dir() -> str:

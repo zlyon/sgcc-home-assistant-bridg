@@ -31,6 +31,9 @@ options:
   LLM_API_KEY: ""
   LLM_BASE_URL: "https://ark.cn-beijing.volces.com/api/v3"
   LLM_MODEL: "doubao-seed-2-0-pro-260215"
+  ARK_API_KEY: ""
+  ARK_BASE_URL: ""
+  ARK_MODEL: ""
   LOGIN_FALLBACK: "qrcode"
   PUBLISHER: "both"
   MQTT_HOST: "127.0.0.1"
@@ -56,6 +59,9 @@ schema:
   LLM_API_KEY: password
   LLM_BASE_URL: str?
   LLM_MODEL: str?
+  ARK_API_KEY: password?
+  ARK_BASE_URL: str?
+  ARK_MODEL: str?
   LOGIN_FALLBACK: str?
   PUBLISHER: str
   MQTT_HOST: str?
