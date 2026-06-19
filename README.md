@@ -95,7 +95,7 @@ Home Assistant OS / Supervised 也可以直接添加 Add-on/App 仓库：
 https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 ```
 
-当前 Add-on 预构建镜像先支持 `amd64`。详细步骤见 [Add-on 安装教程](ha_addons_doc/Add-on教程.md)。
+当前 Add-on 预构建镜像先支持 `amd64`，已在 HAOS 18.0 / Supervisor 2026.06.2 验证安装和启动。详细步骤见 [Add-on 安装教程](ha_addons_doc/Add-on教程.md)。
 
 ### 4. 去 Home Assistant 看实体
 

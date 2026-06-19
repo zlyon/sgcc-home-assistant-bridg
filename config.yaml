@@ -49,15 +49,15 @@ options:
 schema:
   PHONE_NUMBER: str
   PASSWORD: password
-  IGNORE_USER_ID: str
+  IGNORE_USER_ID: str?
   HASS_URL: url
-  HASS_TOKEN: str
+  HASS_TOKEN: str?
   JOB_START_TIME: str
   RETRY_TIMES_LIMIT: int(1,20)
   RETRY_WAIT_TIME_OFFSET_UNIT: int(2,60)
   DRIVER_IMPLICITY_WAIT_TIME: int(5,180)
   PAGE_LOAD_TIMEOUT: int(10,180)
-  LLM_API_KEY: password
+  LLM_API_KEY: password?
   LLM_BASE_URL: str?
   LLM_MODEL: str?
   ARK_API_KEY: password?
@@ -68,7 +68,7 @@ schema:
   MQTT_HOST: str?
   MQTT_PORT: port
   MQTT_USERNAME: str?
-  MQTT_PASSWORD: password
+  MQTT_PASSWORD: password?
   MQTT_DISCOVERY_PREFIX: str
   SGCC_DB_PATH: str
   SCRAPER_SETTLE_SECONDS: float(0,30)

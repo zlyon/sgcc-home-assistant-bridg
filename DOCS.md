@@ -83,6 +83,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 - 当前预构建镜像只发布 `amd64`，所以 `config.yaml` 也先只声明 `amd64`。
 - `config.yaml` 的 `version` 使用 `v0.1.0`，与现有 GHCR tag 对齐。
 - Add-on/App 使用 GHCR 镜像：`ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.0`。
+- 已在 HAOS 18.0 / Supervisor 2026.06.2 上验证仓库添加、识别、安装和启动；真实国网登录、LLM 验证码和 MQTT 发布仍建议按自己的账号环境跑一轮。
 - 安装完成后进入 “配置 / Configuration”。
 - 填写国家电网账号密码、MQTT、REST、LLM 验证码接口。
 - 推荐保持 `PUBLISHER=both`。
