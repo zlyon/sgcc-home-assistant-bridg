@@ -160,7 +160,7 @@ examples/lovelace-sgcc-electricity.yaml
 ## 社区链接
 
 - LINUX DO 社区：[`linux.do`](https://linux.do)
-- 本项目欢迎在 LINUX DO 以“开源推广”标签交流、反馈和改进；发布推广帖后会在这里补充具体讨论链接。
+- LINUX DO 开源推广帖：[`SGCC Home Assistant Bridge`](https://linux.do/t/topic/2431381)
 
 ## 鸣谢
 
