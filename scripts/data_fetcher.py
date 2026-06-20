@@ -13,6 +13,7 @@ from login import SgccLogin
 from login_guard import (
     LoginFailure,
     NonRetryableFetchError,
+    clear_login_cooldown,
     env_bool,
     get_login_cooldown,
     set_login_cooldown,
@@ -175,13 +176,14 @@ class DataFetcher:
                     )
 
                 update_args = account_data_to_update_args(publish_account_data)
+                cache_args = account_data_to_update_args(account_data)
                 logging.info(
                     f"用户 [{masked_user_id}] 数据获取完成: 余额={update_args['balance']}元, "
                     f"最近日用电={update_args['last_daily_usage']}度({update_args['last_daily_date']}), "
                     f"年度用电={update_args['yearly_usage']}度, 年度电费={update_args['yearly_charge']}元, "
                     f"月用电={update_args['month_usage']}度, 月电费={update_args['month_charge']}元")
                 if updator is not None:
-                    updator.update_one_userid(**update_args)
+                    updator.update_one_userid(**update_args, cache_values=cache_args)
                 if mqtt_pub is not None:
                     try:
                         if not mqtt_connected:
@@ -204,6 +206,7 @@ class DataFetcher:
                 session_status_after=session_status_after,
             )
             logging.info(f"抓取运行 {run_id} 完成: success, 账户数={saved_count}, 会话={session_status_after}")
+            clear_login_cooldown()
             return "success"
         except Exception as e:
             if driver is not None and store is not None:

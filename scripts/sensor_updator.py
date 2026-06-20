@@ -38,9 +38,37 @@ class SensorUpdator:
             self.balance_notify = None
 
 
-    def update_one_userid(self, user_id: str, balance: float, last_daily_date: str, last_daily_usage: float, yearly_charge: float, yearly_usage: float, month_charge: float, month_usage: float, tou_data: dict = None, enhanced_balance: dict = None, notify=True):
+    def update_one_userid(
+        self,
+        user_id: str,
+        balance: float,
+        last_daily_date: str,
+        last_daily_usage: float,
+        yearly_charge: float,
+        yearly_usage: float,
+        month_charge: float,
+        month_usage: float,
+        tou_data: dict = None,
+        enhanced_balance: dict = None,
+        notify=True,
+        cache_values: dict | None = None,
+    ):
         logging.info(f"[{_mask_user_id(user_id)}] 开始更新 Home Assistant 传感器数据...")
-        self._save_to_cache(user_id, balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage, tou_data, enhanced_balance)
+        if cache_values is None:
+            cache_values = {
+                "balance": balance,
+                "last_daily_date": last_daily_date,
+                "last_daily_usage": last_daily_usage,
+                "yearly_charge": yearly_charge,
+                "yearly_usage": yearly_usage,
+                "month_charge": month_charge,
+                "month_usage": month_usage,
+                "tou_data": tou_data,
+                "enhanced_balance": enhanced_balance,
+            }
+        cache_values = dict(cache_values)
+        cache_values.pop("user_id", None)
+        self._save_to_cache(user_id, **cache_values)
         postfix = f"_{user_id[-4:]}"
         if balance is not None:
             if notify and self.balance_notify is not None:

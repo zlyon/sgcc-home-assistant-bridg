@@ -129,3 +129,17 @@ def set_login_cooldown(reason: str, minutes: int | None = None) -> CooldownState
     except Exception as e:
         logging.warning(f"写入登录风控冷却状态失败: {redact_text(e)}")
     return state
+
+
+def clear_login_cooldown() -> bool:
+    """Remove persisted login cooldown after a successful authenticated fetch."""
+    path = _cooldown_file()
+    try:
+        if not path.exists():
+            return False
+        path.unlink()
+        logging.info("已清理登录风控冷却状态。")
+        return True
+    except Exception as e:
+        logging.warning(f"清理登录风控冷却状态失败: {redact_text(e)}")
+        return False

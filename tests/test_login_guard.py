@@ -6,6 +6,7 @@ from pathlib import Path
 
 from login_guard import (
     classify_login_failure,
+    clear_login_cooldown,
     get_login_cooldown,
     set_login_cooldown,
     should_retry_login_failure,
@@ -41,6 +42,18 @@ class LoginGuardTestCase(unittest.TestCase):
             self.assertTrue(loaded.active)
             self.assertIn("RK001", loaded.reason)
             self.assertGreater(loaded.remaining_seconds, 0)
+
+    def test_clear_cooldown_removes_persisted_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "cooldown.json"
+            os.environ["SGCC_LOGIN_COOLDOWN_FILE"] = str(path)
+            set_login_cooldown("risk_blocked: RK001", minutes=5)
+
+            self.assertTrue(path.exists())
+            self.assertTrue(clear_login_cooldown())
+            self.assertFalse(path.exists())
+            self.assertFalse(get_login_cooldown().active)
+            self.assertFalse(clear_login_cooldown())
 
     def test_expired_cooldown_is_inactive(self):
         with tempfile.TemporaryDirectory() as tmpdir:
