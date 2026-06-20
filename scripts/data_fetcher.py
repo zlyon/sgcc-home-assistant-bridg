@@ -8,7 +8,7 @@ from browser import build_driver, release_driver
 from config import FetcherConfig
 from const import LOGIN_URL
 from error_watcher import ErrorWatcher
-from ha_mapping import account_data_summary, account_data_to_update_args
+from ha_mapping import account_data_summary, account_data_to_update_args, with_history_daily_if_empty
 from login import SgccLogin
 from mqtt_publisher import MqttPublisher
 from model import FetchRun, mask_account_no
@@ -130,7 +130,14 @@ class DataFetcher:
                 logging.info(f"用户 [{masked_user_id}] Path B 数据已写入 Store: {account_data_summary(account_data)}")
                 logging.debug(f"用户 [{masked_user_id}] Path B 脱敏数据: {redact_account_data(account_data)}")
 
-                update_args = account_data_to_update_args(account_data)
+                publish_account_data = with_history_daily_if_empty(account_data, store, limit=31)
+                if publish_account_data is not account_data:
+                    logging.info(
+                        f"用户 [{masked_user_id}] 本次抓取 daily 为空，发布前从 Store 回填 "
+                        f"{len(publish_account_data.daily)} 条历史日用电数据。"
+                    )
+
+                update_args = account_data_to_update_args(publish_account_data)
                 logging.info(
                     f"用户 [{masked_user_id}] 数据获取完成: 余额={update_args['balance']}元, "
                     f"最近日用电={update_args['last_daily_usage']}度({update_args['last_daily_date']}), "
@@ -142,7 +149,7 @@ class DataFetcher:
                     try:
                         if not mqtt_connected:
                             logging.warning(f"用户 [{masked_user_id}] MQTT 未连接，跳过发布。")
-                        elif not mqtt_pub.publish_account_data(account_data):
+                        elif not mqtt_pub.publish_account_data(publish_account_data):
                             logging.warning(f"用户 [{masked_user_id}] MQTT 发布失败，已跳过。")
                     except Exception as mqtt_error:
                         logging.warning(f"用户 [{masked_user_id}] MQTT 发布异常，已忽略: {redact_text(mqtt_error)}")

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from model import AccountData
 
 
@@ -29,6 +31,24 @@ def account_data_summary(account_data: AccountData) -> str:
         f"monthly={len(account_data.monthly)}({monthly_range}), "
         f"yearly={'yes' if account_data.yearly else 'no'}"
     )
+
+
+def with_history_daily_if_empty(account_data: AccountData, store, limit: int = 31) -> AccountData:
+    """Return a publish-only copy with historical daily rows when this scrape has none.
+
+    The returned object is intended for REST/MQTT/cache publication only.  It
+    must not be saved back as part of the current fetch run, otherwise stale
+    rows would look like newly scraped data.
+    """
+    if account_data.daily:
+        return account_data
+    account_no = account_data.account.account_no
+    if not account_no or store is None:
+        return account_data
+    history_daily = store.get_daily(account_no, limit)
+    if not history_daily:
+        return account_data
+    return replace(account_data, daily=sorted(history_daily, key=lambda row: row.date or ""))
 
 
 def account_data_to_update_args(account_data: AccountData) -> dict:

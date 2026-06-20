@@ -66,6 +66,7 @@ class Scraper:
             self._click_tab("月度电费")
             partials.append(self._parse_current_page())
             self._click_tab("日用电量")
+            self._expand_daily_range_to_30_days()
             partials.append(self._parse_current_page())
 
             data = merge_account_data(*partials)
@@ -139,6 +140,86 @@ class Scraper:
             except Exception:
                 continue
         return False
+
+    def _expand_daily_range_to_30_days(self, min_expected_count: int = 20) -> bool:
+        """Best-effort switch from the default 7-day daily view to 近30天.
+
+        SGCC defaults the 日用电量 tab to a short range.  Clicking 近30天
+        updates Vue component state in-place; failures must not abort the whole
+        scrape, because the current 7-day data is still better than no data.
+        """
+        try:
+            before_count = self._current_daily_count()
+            if before_count >= min_expected_count:
+                logging.info(f"Path B 日用电量已包含 {before_count} 条，无需切换近30天。")
+                return True
+
+            if not self._click_daily_range("近30天"):
+                logging.warning("Path B 未找到/无法点击日用电量近30天控件，保留当前日用电量数据。")
+                return False
+
+            expanded = self._wait_for_daily_range_expansion(before_count, min_expected_count)
+            after_count = self._current_daily_count()
+            if expanded:
+                logging.info(f"Path B 日用电量近30天已生效: {before_count} -> {after_count} 条。")
+                return True
+            logging.warning(f"Path B 等待日用电量近30天数据超时: {before_count} -> {after_count} 条，保留当前数据。")
+            return False
+        except Exception as e:
+            logging.warning(f"Path B 切换日用电量近30天失败，保留当前数据: {e}")
+            return False
+
+    def _click_daily_range(self, range_text: str) -> bool:
+        xpaths = [
+            f"//label[contains(@class,'el-radio-button') and contains(normalize-space(.), '{range_text}')]",
+            f"//label[contains(@class,'el-radio') and contains(normalize-space(.), '{range_text}')]",
+            f"//button[contains(normalize-space(.), '{range_text}')]",
+            f"//span[contains(normalize-space(.), '{range_text}')]/ancestor::*[self::label or self::button or self::div[contains(@class,'el-radio')]][1]",
+            f"//*[contains(normalize-space(.), '{range_text}') and string-length(normalize-space(.)) <= 20]",
+        ]
+        for xpath in xpaths:
+            try:
+                elements = self.driver.find_elements(By.XPATH, xpath)
+            except Exception:
+                continue
+            for element in elements:
+                try:
+                    if not self._is_enabled_visible(element):
+                        continue
+                    self.driver.execute_script("arguments[0].click();", element)
+                    return True
+                except Exception:
+                    continue
+        return False
+
+    def _wait_for_daily_range_expansion(
+        self,
+        previous_count: int,
+        min_expected_count: int = 20,
+        timeout_seconds: Optional[float] = None,
+        poll_frequency: float = 0.2,
+    ) -> bool:
+        timeout = self.wait_seconds if timeout_seconds is None else max(0.0, timeout_seconds)
+        deadline = time.monotonic() + timeout
+        while True:
+            count = self._current_daily_count()
+            if self._daily_count_looks_expanded(count, previous_count, min_expected_count):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(max(0.0, poll_frequency))
+
+    @staticmethod
+    def _daily_count_looks_expanded(count: int, previous_count: int, min_expected_count: int = 20) -> bool:
+        return count >= min_expected_count or (previous_count <= 7 and count > 7)
+
+    def _current_daily_count(self) -> int:
+        try:
+            snapshot = self._snapshot()
+            data = parse_account_data(store=snapshot.get("store"), components=snapshot.get("components"))
+            return len(data.daily)
+        except Exception:
+            return 0
 
     def _wait_for_business_ready(self, label: str, previous_signature: Optional[str] = None) -> None:
         """Bounded replacement for the old fixed settle sleep.
