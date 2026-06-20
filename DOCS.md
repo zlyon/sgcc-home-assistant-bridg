@@ -135,11 +135,15 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `HASS_URL` | Home Assistant 地址，REST 发布使用。 |
 | `HASS_TOKEN` | Home Assistant 长期访问令牌，REST 发布使用。 |
 | `JOB_START_TIME` | 每日抓取开始时间，格式 `HH:MM`。 |
-| `RETRY_TIMES_LIMIT` | 登录、验证码或抓取失败时的重试次数上限。 |
+| `SGCC_DAILY_RUNS` | 每天真实登录抓取次数；无人值守建议保持 `1`，设为 `2` 可恢复早晚两次。 |
+| `RETRY_TIMES_LIMIT` | 登录、验证码或抓取失败时的重试次数上限；风控类失败会熔断，不参与立即重试。 |
+| `RISK_COOLDOWN_MINUTES` | RK001/操作频繁/验证码通过但仍失败后的登录冷却分钟数，默认 `60`。 |
+| `SGCC_LOGIN_COOLDOWN_ENABLED` | 是否启用无人值守登录冷却，建议保持 `true`。 |
+| `SGCC_QRCODE_FALLBACK_UNATTENDED` | 定时无人值守任务是否允许二维码兜底；默认 `false`，避免无人扫码时长时间挂起。 |
 | `LLM_API_KEY` | OpenAI 兼容多模态接口 Key；也兼容 `ARK_API_KEY`。 |
 | `LLM_BASE_URL` | OpenAI 兼容接口 Base URL；也兼容 `ARK_BASE_URL`。 |
 | `LLM_MODEL` | 多模态模型名或接入点 ID；也兼容 `ARK_MODEL`。 |
-| `LOGIN_FALLBACK` | 登录失败兜底方式；`qrcode` 表示二维码人工扫码。 |
+| `LOGIN_FALLBACK` | 登录失败兜底方式；`qrcode` 表示二维码人工扫码，默认只建议手动任务使用。 |
 | `PUBLISHER` | 发布方式：`mqtt`、`rest`、`both`。 |
 | `MQTT_HOST` | MQTT broker 地址。 |
 | `MQTT_PORT` | MQTT broker 端口。 |
@@ -181,6 +185,24 @@ ARK_MODEL="ep-xxxxxxxx"
 
 火山方舟用户建议在控制台创建多模态模型接入点，`LLM_MODEL` 填 `ep-...` 接入点 ID，而不是只填模型族名称。
 
+## 4.1 无人值守登录与风控策略
+
+推荐无人值守配置：
+
+```env
+SGCC_DAILY_RUNS=1
+SGCC_LOGIN_COOLDOWN_ENABLED=true
+RISK_COOLDOWN_MINUTES=60
+SGCC_QRCODE_FALLBACK_UNATTENDED=false
+```
+
+说明：
+
+- 因已支持近 30 天日用电抓取，每天一次成功抓取通常足够补齐近期历史。
+- 默认不安排 12 小时后的第二次真实登录，降低晚间固定时间命中风控的概率。
+- `RETRY_TIMES_LIMIT` 仍用于普通临时失败；RK001、操作频繁、验证码通过但登录仍失败、验证码多次识别失败会被视为不适合立即重试。
+- 二维码兜底适合人工手动排障，不适合作为默认无人值守路径。
+
 ## 5. Home Assistant 实体
 
 当 `PUBLISHER=mqtt` 或 `PUBLISHER=both` 且 MQTT broker 可用时，程序会向 `MQTT_DISCOVERY_PREFIX` 发布 discovery 配置。Home Assistant 会自动出现一个“国网电费 ****后四位”的 device。
@@ -190,7 +212,7 @@ ARK_MODEL="ep-xxxxxxxx"
 | 类型 | Discovery key | 显示名称示例 | 说明 |
 | --- | --- | --- | --- |
 | 金额汇总 | `balance` / `prepay_balance` / `arrears` | 电费余额 / 预付费余额 / 应交金额 | 当前账户金额状态。 |
-| 最新日数据 | `last_daily_usage` | 最近日用电 | state 是最近一天用电量；属性含 `date`、`valley_kwh`、`flat_kwh`、`peak_kwh`、`tip_kwh`。 |
+| 最新日数据 | `last_daily_usage` | 最近日用电 | state 是最近一天用电量；属性含 `date`、`valley_kwh`、`flat_kwh`、`peak_kwh`、`tip_kwh`。程序会尽量让国网页面返回近 30 天日用电。 |
 | 最新月数据 | `month_usage` / `month_charge` | 月度用电 / 月度电费 | state 是最新月度用电或电费；属性含月份和起止日期。 |
 | 本月分时汇总 | `month_valley` / `month_flat` / `month_peak` / `month_tip` | 月度谷/平/峰/尖时电量 | 由当前月已抓到的日读数汇总。 |
 | 年度汇总 | `year_usage` / `year_charge` | 年度用电 / 年度电费 | state 是年度累计用电或电费。 |
@@ -240,7 +262,7 @@ examples/lovelace-sgcc-electricity.yaml
 - 登录页资源或腾讯验证码脚本没完整加载。
 - 当前账号、IP、会话组合被风控。
 
-项目检测到 RK001 后会停止本轮，避免反复打账号。
+项目检测到 RK001、操作过于频繁、验证码通过后仍停留登录页等情况后，会停止本轮立即重试，并写入 `/data/sgcc_login_cooldown.json` 冷却状态。冷却期间定时任务不会继续触发真实国网登录；已有 HA/MQTT 数据仍会优先通过缓存重发布维持展示。
 
 ### 验证码一直被识别为 slider
 

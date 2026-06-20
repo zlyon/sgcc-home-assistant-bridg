@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- 日用电抓取会尽量切换到国网页面近 30 天范围，并把更多日历史发布到 HA/MQTT。
+- 新增无人值守登录风控熔断：RK001、操作频繁、验证码通过后仍失败等情况会进入冷却，避免立即重试反复打账号。
+- 新增 `SGCC_DAILY_RUNS`、`RISK_COOLDOWN_MINUTES`、`SGCC_LOGIN_COOLDOWN_ENABLED`、`SGCC_QRCODE_FALLBACK_UNATTENDED` 等运行参数。
+
+### Changed
+
+- 无人值守默认每日一次真实登录；二维码兜底默认不用于定时无人值守任务。
+- 浏览器启动时补充语言、timezone 与 webdriver 显性特征一致性设置，减少误判风险。
+
 ## [arc-v0.1.0] - 2026-06-18
 
 第一版 SGCC Home Assistant Bridge 二开发布。

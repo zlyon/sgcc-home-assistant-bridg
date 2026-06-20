@@ -74,6 +74,24 @@ def build_driver(config: FetcherConfig):
     except Exception as e:
         logging.warning(f"设置脚本超时失败: {e}")
 
+
+    try:
+        driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+            "source": f"""
+                Object.defineProperty(navigator, 'webdriver', {{get: () => undefined}});
+                Object.defineProperty(navigator, 'languages', {{get: () => {browser_lang.split(',')!r}}});
+                Object.defineProperty(navigator, 'language', {{get: () => '{browser_lang.split(',')[0]}'}});
+            """
+        })
+        try:
+            driver.execute_cdp_cmd("Emulation.setTimezoneOverride", {
+                "timezoneId": os.getenv("BROWSER_TIMEZONE", "Asia/Shanghai")
+            })
+        except Exception as tz_error:
+            logging.warning(f"CDP 设置 timezone 失败: {tz_error}")
+    except Exception as e:
+        logging.warning(f"CDP 注入浏览器一致性脚本失败: {e}")
+
     _setting_driver(driver)
 
     return driver

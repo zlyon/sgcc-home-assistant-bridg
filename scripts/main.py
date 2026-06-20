@@ -17,6 +17,7 @@ from model import Account, AccountData, Balance, DailyReading, MonthlyReading, Y
 from mqtt_publisher import MqttPublisher
 from redact import redact_text
 from store import Store
+from login_guard import NonRetryableFetchError, env_bool, get_login_cooldown
 
 
 def main():
@@ -52,6 +53,7 @@ def main():
         VERSION = os.getenv("VERSION")
         RETRY_TIMES_LIMIT = int(os.getenv("RETRY_TIMES_LIMIT", 5))
         REPUBLISH_INTERVAL_MINUTES = int(os.getenv("REPUBLISH_INTERVAL_MINUTES", 15))
+        SGCC_DAILY_RUNS = int(os.getenv("SGCC_DAILY_RUNS", "1"))
 
         logger_init(LOG_LEVEL)
         logging.info(f"当前以Docker镜像方式运行。")
@@ -79,9 +81,12 @@ def main():
     # 添加随机延迟
     next_run_time = parsed_time + timedelta(hours=12)
 
-    logging.info(f'立即执行任务！下次运行时间为每天 {parsed_time.strftime("%H:%M")} 和 {next_run_time.strftime("%H:%M")}')
     schedule.every().day.at(parsed_time.strftime("%H:%M")).do(safe_scheduled_job, run_task, fetcher, "schedule")
-    schedule.every().day.at(next_run_time.strftime("%H:%M")).do(safe_scheduled_job, run_task, fetcher, "schedule")
+    if SGCC_DAILY_RUNS >= 2:
+        schedule.every().day.at(next_run_time.strftime("%H:%M")).do(safe_scheduled_job, run_task, fetcher, "schedule")
+        logging.info(f'立即执行任务！下次运行时间为每天 {parsed_time.strftime("%H:%M")} 和 {next_run_time.strftime("%H:%M")}')
+    else:
+        logging.info(f'立即执行任务！下次运行时间为每天 {parsed_time.strftime("%H:%M")}；无人值守模式默认不安排晚间第二次登录。')
 
     # 定期重发数据，防止HA重启后数据丢失
     # 如果缓存数据日期与当前日期不一致，则从国家电网重新获取数据
@@ -110,6 +115,14 @@ def safe_scheduled_job(job_func, *args, **kwargs):
 
 def republish_or_fetch(updator: SensorUpdator | None, fetcher: DataFetcher, config: FetcherConfig):
     if not republish_cached(updator, config):
+        if env_bool("SGCC_LOGIN_COOLDOWN_ENABLED", True):
+            cooldown = get_login_cooldown()
+            if cooldown.active:
+                logging.warning(
+                    f"缓存重发布未完全成功，但登录风控冷却中，剩余 "
+                    f"{cooldown.remaining_seconds // 60} 分钟；本轮不触发国网登录。"
+                )
+                return
         logging.info("缓存数据已过期或不存在，正在从国家电网获取数据...")
         run_task(fetcher, "schedule")
 
@@ -339,8 +352,14 @@ def run_task(data_fetcher: DataFetcher, trigger_type: str = "manual"):
         try:
             current_trigger_type = trigger_type if retry_times == 1 else "retry"
             result = data_fetcher.fetch(trigger_type=current_trigger_type)
-            if result == "skipped_busy":
+            if result in {"skipped_busy", "skipped_cooldown"}:
                 return
+            return
+        except NonRetryableFetchError as e:
+            logging.error(
+                f"状态刷新任务遇到不可立即重试的登录/风控失败，已停止本轮重试: "
+                f"[{data_fetcher._redact_text(e)}]"
+            )
             return
         except Exception as e:
             logging.error(f"状态刷新任务失败，原因是 [{data_fetcher._redact_text(e)}]，还剩 {RETRY_TIMES_LIMIT - retry_times} 次重试机会。")

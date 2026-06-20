@@ -11,6 +11,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.common.exceptions import TimeoutException
 
 from captcha_selenium import solve_captcha_in_browser
+from login_guard import LoginFailure, classify_login_failure
 from config import FetcherConfig
 from const import LOGIN_URL
 from error_watcher import ErrorWatcher
@@ -73,7 +74,7 @@ class SgccLogin:
             return False, "error"
 
     @ErrorWatcher.watch
-    def login(self, phone_code=False) -> bool:
+    def login(self, phone_code=False, allow_fallback: bool = True) -> bool:
         driver = self.driver
         try:
             self._safe_get(driver, LOGIN_URL, "登录页面")
@@ -87,11 +88,11 @@ class SgccLogin:
             except Exception as wait_error:
                 ErrorWatcher.instance().capture("login_page_load_failed", wait_error)
                 logging.error(f"登录页面加载失败: {LOGIN_URL}")
-                return False
+                raise LoginFailure("page_load_failed", "登录页面加载失败")
         except Exception as e:
             ErrorWatcher.instance().capture("login_page_open_failed", e)
             logging.error(f"登录页面加载失败: {LOGIN_URL}")
-            return False
+            raise LoginFailure("page_load_failed", "登录页面加载失败")
         logging.info(f"打开登录页面: {LOGIN_URL}。\r")
         time.sleep(self.config.RETRY_WAIT_TIME_OFFSET_UNIT*2)
         # swtich to username-password login page
@@ -162,13 +163,29 @@ class SgccLogin:
                         if error:
                             logging.info(f"验证码通过但登录失败: [{error}]\r")
                         else:
-                            logging.error("验证码已通过但仍停留在登录页面。")
+                            error = "验证码已通过但仍停留在登录页面。"
+                            logging.error(error)
+                        category = classify_login_failure(error, captcha_passed=True)
+                        ErrorWatcher.instance().capture(f"login_failed_{category}", error)
+                        if allow_fallback and self._fallback_login(driver, error):
+                            return True
+                        raise LoginFailure(category, error)
                 else:
-                    error = self._get_error_message(driver, "//div[@class='errmsg-tip']//span")
+                    error = self._get_error_message(driver, "//div[@class='errmsg-tip']//span") or "点击验证码识别在所有重试后均失败。"
                     logging.error("点击验证码识别在所有重试后均失败。")
+                    category = classify_login_failure(error, captcha_failed=True)
+                    ErrorWatcher.instance().capture(f"login_failed_{category}", error)
+                    if allow_fallback and self._fallback_login(driver, error):
+                        return True
+                    raise LoginFailure(category, error)
             else:
                 logging.error(f"登录失败: [{error}]\r")
-        return self._fallback_login(driver, error)
+                category = classify_login_failure(error)
+                ErrorWatcher.instance().capture(f"login_failed_{category}", error)
+                if allow_fallback and self._fallback_login(driver, error):
+                    return True
+                raise LoginFailure(category, error)
+        raise LoginFailure("login_failed", "登录失败")
 
     def _safe_get(self, driver, url: str, label: str = "页面", fast: bool = False):
         """Navigate with a bounded page-load timeout.

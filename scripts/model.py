@@ -78,7 +78,7 @@ class AccountData:
 @dataclass
 class FetchRun:
     trigger_type: str               # schedule|manual|retry|startup
-    status: str = "running"         # running|success|failed|skipped_busy
+    status: str = "running"         # running|success|failed|skipped_busy|skipped_cooldown
     started_at: str = ""
     finished_at: Optional[str] = None
     session_status_before: Optional[str] = None

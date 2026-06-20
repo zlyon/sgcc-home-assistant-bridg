@@ -10,6 +10,14 @@ from const import LOGIN_URL
 from error_watcher import ErrorWatcher
 from ha_mapping import account_data_summary, account_data_to_update_args, with_history_daily_if_empty
 from login import SgccLogin
+from login_guard import (
+    LoginFailure,
+    NonRetryableFetchError,
+    env_bool,
+    get_login_cooldown,
+    set_login_cooldown,
+    should_retry_login_failure,
+)
 from mqtt_publisher import MqttPublisher
 from model import FetchRun, mask_account_no
 from redact import install_account_log_redaction, mask_secret, now_iso, redact_text
@@ -64,6 +72,24 @@ class DataFetcher:
                 started_at=now_iso(),
             ))
 
+            if env_bool("SGCC_LOGIN_COOLDOWN_ENABLED", True) and trigger_type != "manual":
+                cooldown = get_login_cooldown()
+                if cooldown.active:
+                    message = (
+                        f"登录风控冷却中，剩余 {cooldown.remaining_seconds // 60} 分钟，"
+                        f"跳过本次无人值守登录: {cooldown.reason}"
+                    )
+                    logging.warning(message)
+                    store.finish_run(
+                        run_id,
+                        "skipped_cooldown",
+                        session_status_before=session_status_before,
+                        session_status_after=session_status_after,
+                        error_type="LoginCooldown",
+                        error_message_redacted=redact_text(message),
+                    )
+                    return "skipped_cooldown"
+
             driver = build_driver(self.config)
             ErrorWatcher.instance().set_driver(driver)
 
@@ -84,17 +110,28 @@ class DataFetcher:
             try:
                 login_client = SgccLogin(driver, self._username, self._password, self.config)
                 if os.getenv("DEBUG_MODE", "false").lower() == "true":
-                    if login_client.login(phone_code=True):
-                        logging.info("登录成功!")
-                    else:
-                        logging.info("登录失败!")
-                        raise Exception("login unsuccessed")
+                    logged_in = login_client.login(phone_code=True)
                 else:
-                    if login_client.login():
-                        logging.info("登录成功!")
-                    else:
-                        logging.info("登录失败!")
-                        raise Exception("login unsuccessed")
+                    allow_fallback = env_bool("SGCC_QRCODE_FALLBACK_UNATTENDED", False) or trigger_type == "manual"
+                    logged_in = login_client.login(allow_fallback=allow_fallback)
+                if logged_in:
+                    logging.info("登录成功!")
+                else:
+                    logging.info("登录失败!")
+                    raise LoginFailure("login_failed", "login unsuccessed")
+            except LoginFailure as e:
+                if not should_retry_login_failure(e.category):
+                    cooldown = set_login_cooldown(f"{e.category}: {e.message}")
+                    logging.error(
+                        f"登录失败[{e.category}]，判定为不应立即重试；已熔断到 "
+                        f"{cooldown.until.isoformat() if cooldown.until else 'unknown'}: {redact_text(e.message)}"
+                    )
+                    raise NonRetryableFetchError(str(e)) from e
+                logging.error(
+                    f"登录失败[{e.category}]，原因: {redact_text(e.message)}。"
+                    f"还剩 {self.config.RETRY_TIMES_LIMIT} 次重试机会。"
+                )
+                raise
             except Exception as e:
                 logging.error(
                     f"浏览器驱动异常，原因: {redact_text(e)}。还剩 {self.config.RETRY_TIMES_LIMIT} 次重试机会。")
