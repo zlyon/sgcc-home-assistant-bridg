@@ -40,7 +40,7 @@ options:
   ARK_BASE_URL: ""
   ARK_MODEL: ""
   LOGIN_FALLBACK: "qrcode"
-  PUBLISHER: "both"
+  PUBLISHER: "mqtt"
   MQTT_HOST: "127.0.0.1"
   MQTT_PORT: 1883
   MQTT_USERNAME: ""

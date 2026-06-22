@@ -43,7 +43,9 @@ $EDITOR .env
 PHONE_NUMBER="your-phone-number"
 PASSWORD="your-password"
 
-PUBLISHER="both"
+# 推荐 mqtt：只生成 MQTT Discovery 设备实体。
+# 如需兼容旧仪表盘/自动化，可改为 both 同时发布旧 REST 实体。
+PUBLISHER="mqtt"
 MQTT_HOST="127.0.0.1"
 MQTT_PORT=1883
 MQTT_USERNAME=""
@@ -109,6 +111,31 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 ### 4. 去 Home Assistant 看实体
 
 MQTT Discovery 正常后，HA 会出现一个类似 `国网电费 ****1234` 的设备，下面自动挂传感器。
+
+### 关于新旧实体
+
+推荐使用：
+
+```env
+PUBLISHER="mqtt"
+```
+
+此模式只通过 MQTT Discovery 生成实体，实体会挂在“国网电费 ****后四位”设备下。
+
+如果设置为：
+
+```env
+PUBLISHER="both"
+```
+
+程序会同时发布：
+
+- MQTT Discovery 实体：推荐的新实体，挂在“国网电费 ****后四位”设备下。
+- REST 兼容实体：沿用旧项目命名，例如 `sensor.electricity_charge_balance_xxxx`、`sensor.month_electricity_usage_xxxx`。
+
+REST 兼容实体主要用于迁移旧仪表盘或自动化。如果不需要兼容旧实体，建议使用 `PUBLISHER=mqtt`。
+
+如果升级后 Home Assistant 里仍残留旧的 `unavailable` / `unknown` 实体，可以在 HA 的“设置 → 设备与服务 → 实体”中手动删除旧实体，或清理旧 MQTT retained discovery。
 
 ## 数据和实体概览
 

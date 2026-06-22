@@ -61,7 +61,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `LLM_BASE_URL` | OpenAI 兼容多模态接口 Base URL。 |
 | `LLM_API_KEY` | OpenAI 兼容多模态接口 Key。 |
 | `LLM_MODEL` | 多模态模型名或火山方舟 `ep-...` 接入点 ID。 |
-| `PUBLISHER` | 推荐 `both`，同时发布 MQTT Discovery 和 REST 兼容状态。 |
+| `PUBLISHER` | 推荐 `mqtt`，只生成 MQTT Discovery 设备实体；需要兼容旧仪表盘/自动化时再改为 `both`。 |
 | `MQTT_HOST` | MQTT broker 地址。 |
 | `MQTT_PORT` | MQTT broker 端口，通常是 `1883`。 |
 | `MQTT_USERNAME` | MQTT 用户名，可留空。 |

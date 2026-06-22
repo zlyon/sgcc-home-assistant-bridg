@@ -118,8 +118,8 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 - Add-on/App 使用 GHCR 镜像：`ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.1`。
 - 已在 HAOS 18.0 / Supervisor 2026.06.2 上验证仓库添加、识别、安装和启动；真实国网登录、LLM 验证码和 MQTT 发布仍建议按自己的账号环境跑一轮。
 - 安装完成后进入 “配置 / Configuration”。
-- 填写国家电网账号密码、MQTT、REST、LLM 验证码接口。
-- 推荐保持 `PUBLISHER=both`。
+- 填写国家电网账号密码、MQTT、LLM 验证码接口；只有使用 `rest`/`both` 时才需要 REST 相关配置。
+- 推荐使用 `PUBLISHER=mqtt`；只有需要兼容旧仪表盘或自动化时才使用 `PUBLISHER=both`。
 - 保存后在 “信息 / Info” 中启动。
 - 失败时查看日志和 `/data/errors`。
 
@@ -144,7 +144,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `LLM_BASE_URL` | OpenAI 兼容接口 Base URL；也兼容 `ARK_BASE_URL`。 |
 | `LLM_MODEL` | 多模态模型名或接入点 ID；也兼容 `ARK_MODEL`。 |
 | `LOGIN_FALLBACK` | 登录失败兜底方式；`qrcode` 表示二维码人工扫码，默认只建议手动任务使用。 |
-| `PUBLISHER` | 发布方式：`mqtt`、`rest`、`both`。 |
+| `PUBLISHER` | 发布方式：`mqtt`、`rest`、`both`；推荐 `mqtt`。`both` 会额外生成旧 REST 兼容实体。 |
 | `MQTT_HOST` | MQTT broker 地址。 |
 | `MQTT_PORT` | MQTT broker 端口。 |
 | `MQTT_USERNAME` | MQTT 用户名，可留空。 |
@@ -206,6 +206,10 @@ SGCC_QRCODE_FALLBACK_UNATTENDED=false
 ## 5. Home Assistant 实体
 
 当 `PUBLISHER=mqtt` 或 `PUBLISHER=both` 且 MQTT broker 可用时，程序会向 `MQTT_DISCOVERY_PREFIX` 发布 discovery 配置。Home Assistant 会自动出现一个“国网电费 ****后四位”的 device。
+
+推荐使用 `PUBLISHER=mqtt`，此时只生成 MQTT Discovery 设备实体。`PUBLISHER=both` 会同时发布 MQTT Discovery 实体和 REST 兼容实体；REST 兼容实体沿用旧项目命名，例如 `sensor.electricity_charge_balance_xxxx`、`sensor.month_electricity_usage_xxxx`，主要用于迁移旧仪表盘或自动化。若不需要兼容旧实体，请使用 `PUBLISHER=mqtt`。
+
+如果升级后 HA 仍残留旧的 `unavailable` / `unknown` 实体，可以在 HA 的“设置 → 设备与服务 → 实体”中手动删除旧实体，或清理旧 MQTT retained discovery。
 
 户号会在实体名称、unique id 和日志中脱敏，只保留末四位用于区分。Discovery key 会进入 MQTT topic、`unique_id` 和 `object_id`；实际 entity id 由 Home Assistant 实体注册表生成，请以 HA 实际显示为准。
 

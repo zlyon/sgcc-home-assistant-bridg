@@ -13,7 +13,7 @@ class FetcherConfig:
     QR_CODE_LOGIN_WAIT_COUNT: int = 7
     QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT: int = 10
     user_name_map: dict[str, str] = field(default_factory=dict)
-    PUBLISHER: str = "both"
+    PUBLISHER: str = "mqtt"
     MQTT_HOST: str = ""
     MQTT_PORT: int = 1883
     MQTT_USERNAME: str = ""
@@ -44,7 +44,7 @@ class FetcherConfig:
             QR_CODE_LOGIN_WAIT_COUNT=int(os.getenv("QR_CODE_LOGIN_WAIT_COUNT", 7)),
             QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT=int(os.getenv("QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT", 10)),
             user_name_map=user_name_map,
-            PUBLISHER=os.getenv("PUBLISHER", "both").strip().lower(),
+            PUBLISHER=os.getenv("PUBLISHER", "mqtt").strip().lower(),
             MQTT_HOST=os.getenv("MQTT_HOST", ""),
             MQTT_PORT=int(os.getenv("MQTT_PORT", 1883)),
             MQTT_USERNAME=os.getenv("MQTT_USERNAME", ""),

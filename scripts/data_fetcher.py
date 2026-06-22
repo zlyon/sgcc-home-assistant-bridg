@@ -99,8 +99,8 @@ class DataFetcher:
             logging.info("浏览器驱动已初始化。")
             publisher = self.config.PUBLISHER
             if publisher not in {"rest", "mqtt", "both"}:
-                logging.warning(f"未知 PUBLISHER={publisher}，回退为 both。")
-                publisher = "both"
+                logging.warning(f"未知 PUBLISHER={publisher}，回退为 mqtt。")
+                publisher = "mqtt"
             updator = SensorUpdator() if publisher in {"rest", "both"} else None
             mqtt_pub = MqttPublisher(self.config) if publisher in {"mqtt", "both"} else None
             mqtt_connected = mqtt_pub.connect() if mqtt_pub is not None else False

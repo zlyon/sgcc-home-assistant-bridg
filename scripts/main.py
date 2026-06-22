@@ -151,8 +151,8 @@ def republish_cached(updator: SensorUpdator | None, config: FetcherConfig) -> bo
     """
     publisher = config.PUBLISHER
     if publisher not in {"rest", "mqtt", "both"}:
-        logging.warning(f"未知 PUBLISHER={publisher}，回退为 both。")
-        publisher = "both"
+        logging.warning(f"未知 PUBLISHER={publisher}，回退为 mqtt。")
+        publisher = "mqtt"
 
     rest_ok = True
     mqtt_ok = True
@@ -183,7 +183,7 @@ def has_recent_cached_business_data(updator: SensorUpdator | None, config: Fetch
     """
     publisher = config.PUBLISHER
     if publisher not in {"rest", "mqtt", "both"}:
-        publisher = "both"
+        publisher = "mqtt"
 
     mqtt_recent = _store_has_recent_business_data(config) if publisher in {"mqtt", "both"} else True
     rest_recent = (
