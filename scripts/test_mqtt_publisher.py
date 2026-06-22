@@ -244,6 +244,44 @@ class MqttPublisherTestCase(unittest.TestCase):
         self.assertEqual(yearly_attrs["year"], "2026")
         self.assertEqual(yearly_attrs["charge_cny"], 123.45)
 
+
+    def test_publish_skips_entities_without_state_values(self):
+        account_no = "1234567890123"
+        cfg = FetcherConfig(
+            MQTT_HOST="broker.local",
+            MQTT_DISCOVERY_PREFIX="homeassistant",
+        )
+        publisher = MqttPublisher(cfg)
+        self.assertTrue(publisher.connect())
+
+        data = AccountData(
+            account=Account(account_no=account_no),
+            balance=Balance(
+                account_no=account_no,
+                observed_at="2026-06-21T18:03:34+08:00",
+                balance_cny=None,
+                prepay_balance_cny=127.5,
+                arrears_cny=70.0,
+            ),
+        )
+
+        self.assertTrue(publisher.publish_account_data(data))
+        config_messages = {
+            topic: payload
+            for topic, payload, _ in FakeClient.instances[-1].published
+            if topic.endswith("/config")
+        }
+        active_config_topics = {topic for topic, payload in config_messages.items() if payload}
+        state_messages = {topic: payload for topic, payload, _ in FakeClient.instances[-1].published if topic.endswith("/state")}
+
+        self.assertEqual(config_messages["homeassistant/sensor/sgcc_xxxxxxxxx0123/balance/config"], "")
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/balance/config", active_config_topics)
+        self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/prepay_balance/config", active_config_topics)
+        self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/arrears/config", active_config_topics)
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/prepay_balance/state"], "127.5")
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/arrears/state"], "70.0")
+
+
     def test_publish_account_data_rejects_account_without_business_values(self):
         account_no = "1234567890123"
         cfg = FetcherConfig(

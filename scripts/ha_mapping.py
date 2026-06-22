@@ -59,15 +59,21 @@ def account_data_to_update_args(account_data: AccountData) -> dict:
     latest_day = _latest_daily(account_data)
 
     balance = None
+    prepay_balance = None
+    arrears = None
     enhanced_balance = None
     if balance_model is not None:
+        # Keep the three SGCC money concepts separate.  Prepaid accounts may
+        # only expose prepay_balance_cny; publishing that value as
+        # electricity_charge_balance makes HA show a plausible but wrong
+        # account balance.
         balance = balance_model.balance_cny
-        if balance is None:
-            balance = balance_model.prepay_balance_cny
-        if balance_model.arrears_cny is not None:
+        prepay_balance = balance_model.prepay_balance_cny
+        arrears = balance_model.arrears_cny
+        if arrears is not None:
             enhanced_balance = {
                 "as_of": balance_model.observed_at,
-                "amount_due": balance_model.arrears_cny,
+                "amount_due": arrears,
                 "user_id": user_id,
             }
 
@@ -101,6 +107,8 @@ def account_data_to_update_args(account_data: AccountData) -> dict:
     return {
         "user_id": user_id,
         "balance": balance,
+        "prepay_balance": prepay_balance,
+        "arrears": arrears,
         "last_daily_date": latest_day.date if latest_day else None,
         "last_daily_usage": latest_day.total_usage_kwh if latest_day else None,
         "yearly_charge": yearly.total_charge_cny if yearly else None,

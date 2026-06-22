@@ -10,6 +10,8 @@ SCALAR_DATA_KEYS = (
     "yearly_usage",
     "month_charge",
     "month_usage",
+    "prepay_balance",
+    "arrears",
 )
 
 TOU_ROW_DATA_KEYS = (

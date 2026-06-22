@@ -48,12 +48,16 @@ class SensorUpdator:
         yearly_usage: float,
         month_charge: float,
         month_usage: float,
+        prepay_balance: float = None,
+        arrears: float = None,
         tou_data: dict = None,
         enhanced_balance: dict = None,
         notify=True,
         cache_values: dict | None = None,
     ):
         logging.info(f"[{_mask_user_id(user_id)}] 开始更新 Home Assistant 传感器数据...")
+        if arrears is None and enhanced_balance and enhanced_balance.get("amount_due") is not None:
+            arrears = enhanced_balance["amount_due"]
         if cache_values is None:
             cache_values = {
                 "balance": balance,
@@ -63,6 +67,8 @@ class SensorUpdator:
                 "yearly_usage": yearly_usage,
                 "month_charge": month_charge,
                 "month_usage": month_usage,
+                "prepay_balance": prepay_balance,
+                "arrears": arrears,
                 "tou_data": tou_data,
                 "enhanced_balance": enhanced_balance,
             }
@@ -83,6 +89,8 @@ class SensorUpdator:
             if notify and self.balance_notify is not None:
                 self.balance_notify(user_id, balance)
             record_publish_result(self.update_balance(postfix, balance, enhanced_balance))
+        else:
+            record_publish_result(self.delete_sensor_state(BALANCE_SENSOR_NAME + postfix))
         if last_daily_usage is not None:
             record_publish_result(self.update_last_daily_usage(postfix, last_daily_date, last_daily_usage))
         if yearly_usage is not None:
@@ -98,9 +106,14 @@ class SensorUpdator:
         if tou_data:
             record_publish_result(self._update_tou_sensors(postfix, tou_data))
 
-        # 应交金额传感器
-        if enhanced_balance and enhanced_balance.get("amount_due") is not None:
-            record_publish_result(self.update_prepay_balance(postfix, enhanced_balance["amount_due"]))
+        if prepay_balance is not None:
+            record_publish_result(self.update_prepay_balance(postfix, prepay_balance))
+        else:
+            record_publish_result(self.delete_sensor_state(PREPAY_BALANCE_SENSOR_NAME + postfix))
+        if arrears is not None:
+            record_publish_result(self.update_arrears(postfix, arrears))
+        else:
+            record_publish_result(self.delete_sensor_state(ARREARS_SENSOR_NAME + postfix))
 
         if publish_ok:
             logging.info(f"[{_mask_user_id(user_id)}] Home Assistant 传感器数据更新完成!")
@@ -112,7 +125,7 @@ class SensorUpdator:
         from const import get_data_dir
         return os.path.join(get_data_dir(), 'sgcc_cache.json')
 
-    def _save_to_cache(self, user_id, balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage, tou_data=None, enhanced_balance=None):
+    def _save_to_cache(self, user_id, balance, last_daily_date, last_daily_usage, yearly_charge, yearly_usage, month_charge, month_usage, prepay_balance=None, arrears=None, tou_data=None, enhanced_balance=None):
         cache_file = self._get_cache_file()
         abs_cache_file = os.path.abspath(cache_file)
         data = {}
@@ -131,6 +144,8 @@ class SensorUpdator:
             "yearly_usage": yearly_usage,
             "month_charge": month_charge,
             "month_usage": month_usage,
+            "prepay_balance": prepay_balance,
+            "arrears": arrears,
             "timestamp": datetime.now().isoformat()
         }
 
@@ -200,6 +215,26 @@ class SensorUpdator:
             return ok and republished_count > 0
         except Exception as e:
             logging.error(f"重新推送数据失败: {e}")
+            return False
+
+
+    def delete_sensor_state(self, sensorName: str) -> bool:
+        """删除当前没有源数据的旧 REST 状态，避免 HA 留下陈旧/误导实体。"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + self.token,
+        }
+        url = self.base_url + API_PATH + sensorName
+        try:
+            response = requests.delete(url, headers=headers, timeout=10)
+            if response.status_code in (200, 404):
+                if response.status_code == 200:
+                    logging.info(f"Home Assistant 传感器 {sensorName} 当前无源数据，已删除旧状态。")
+                return True
+            logging.warning(f"删除 Home Assistant 传感器 {sensorName} 旧状态失败: {response.status_code}, {response.content}")
+            return False
+        except Exception as e:
+            logging.warning(f"删除 Home Assistant 传感器 {sensorName} 旧状态失败: {e}")
             return False
 
     def get_sensor_state(self, sensor_name):
@@ -440,6 +475,31 @@ class SensorUpdator:
                 "device_class": "monetary",
                 "state_class": "total",
                 "friendly_name": "预付费余额",
+            },
+        }
+        ok = self.send_url(sensorName, request_body)
+        if ok:
+            logging.info(f"Home Assistant 传感器 {sensorName} 状态已更新: {sensorState} CNY")
+        return ok
+
+
+    def update_arrears(self, postfix: str, sensorState: float):
+        """更新应交金额/欠费传感器"""
+        sensorName = ARREARS_SENSOR_NAME + postfix
+        if not self.should_update(sensorName, sensorState):
+            logging.info(f"跳过 {sensorName} 的更新，状态相同。")
+            return True
+        last_reset = datetime.now().strftime("%Y-%m-%d, %H:%M:%S")
+        request_body = {
+            "state": sensorState,
+            "unique_id": sensorName,
+            "attributes": {
+                "last_reset": last_reset,
+                "unit_of_measurement": "CNY",
+                "icon": "mdi:cash-alert",
+                "device_class": "monetary",
+                "state_class": "total",
+                "friendly_name": "应交金额",
             },
         }
         ok = self.send_url(sensorName, request_body)

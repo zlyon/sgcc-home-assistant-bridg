@@ -5,7 +5,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 from ha_mapping import account_data_to_update_args, with_history_daily_if_empty
-from model import Account, AccountData, DailyReading
+from model import Account, AccountData, Balance, DailyReading
 
 
 class FakeStore:
@@ -45,6 +45,27 @@ class HistoryDailyBackfillTestCase(unittest.TestCase):
 
         self.assertIs(with_history_daily_if_empty(account_data, store), account_data)
         self.assertEqual(store.calls, [])
+
+
+class BalanceMappingTestCase(unittest.TestCase):
+    def test_prepay_balance_is_not_published_as_charge_balance(self):
+        account_data = AccountData(
+            account=Account(account_no="1234567890123"),
+            balance=Balance(
+                account_no="1234567890123",
+                observed_at="2026-06-21T18:03:34+08:00",
+                balance_cny=None,
+                prepay_balance_cny=127.5,
+                arrears_cny=70.0,
+            ),
+        )
+
+        args = account_data_to_update_args(account_data)
+
+        self.assertIsNone(args["balance"])
+        self.assertEqual(args["prepay_balance"], 127.5)
+        self.assertEqual(args["arrears"], 70.0)
+        self.assertEqual(args["enhanced_balance"]["amount_due"], 70.0)
 
 
 if __name__ == "__main__":

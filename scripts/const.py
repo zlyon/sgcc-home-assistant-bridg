@@ -27,6 +27,7 @@ MONTH_FLAT_SENSOR_NAME = "sensor.month_flat_usage"
 MONTH_PEAK_SENSOR_NAME = "sensor.month_peak_usage"
 MONTH_TIP_SENSOR_NAME = "sensor.month_tip_usage"
 PREPAY_BALANCE_SENSOR_NAME = "sensor.prepay_balance"
+ARREARS_SENSOR_NAME = "sensor.electricity_arrears"
 BALANCE_UNIT = "CNY"
 USAGE_UNIT = "KWH"
 

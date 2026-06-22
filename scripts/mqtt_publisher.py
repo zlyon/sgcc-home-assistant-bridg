@@ -96,9 +96,16 @@ class MqttPublisher:
             for spec in self._sensor_specs(account_data, masked, device):
                 value = spec.pop("value")
                 key = spec.pop("key")
-                attributes = spec.pop("attributes", None)
                 state_topic = f"sgcc/{node}/{key}/state"
                 config_topic = f"{self.discovery_prefix}/sensor/{node}/{key}/config"
+                if value is None:
+                    # MQTT Discovery retained configs without matching states leave
+                    # Home Assistant with unknown/unavailable entities.  Publish an
+                    # empty retained config to remove stale entities from earlier
+                    # versions, and do not recreate them until a real value exists.
+                    self._publish(config_topic, "", retain=True)
+                    continue
+                attributes = spec.pop("attributes", None)
                 payload = {
                     "name": spec.pop("name"),
                     "unique_id": f"sgcc_{masked}_{key}",
@@ -117,9 +124,8 @@ class MqttPublisher:
                         json.dumps(attributes, ensure_ascii=False),
                         retain=True,
                     )
-                if value is not None:
-                    self._publish(state_topic, self._format_value(value), retain=True)
-                    published_states += 1
+                self._publish(state_topic, self._format_value(value), retain=True)
+                published_states += 1
             if published_configs and not published_states:
                 logging.warning("MQTT Discovery 配置已发布，但当前账户数据没有可用状态值；本次 MQTT 发布不视为成功。")
             return published_configs > 0 and published_states > 0

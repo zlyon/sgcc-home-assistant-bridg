@@ -21,6 +21,10 @@ class CacheOnlySensorUpdator(SensorUpdator):
     def should_update(self, sensor_name, new_state, check_attributes=None):
         return True
 
+    def delete_sensor_state(self, sensorName):
+        self.calls.append(("delete", sensorName))
+        return True
+
     def update_balance(self, postfix, sensorState, enhanced_balance=None):
         self.calls.append(("balance", postfix, sensorState, enhanced_balance))
 
@@ -38,6 +42,9 @@ class CacheOnlySensorUpdator(SensorUpdator):
 
     def update_prepay_balance(self, postfix, sensorState):
         self.calls.append(("prepay", postfix, sensorState))
+
+    def update_arrears(self, postfix, sensorState):
+        self.calls.append(("arrears", postfix, sensorState))
 
 
 class SensorUpdatorCacheValuesTestCase(unittest.TestCase):
@@ -96,6 +103,34 @@ class SensorUpdatorCacheValuesTestCase(unittest.TestCase):
             self.assertEqual(entry["balance"], 88.0)
             self.assertEqual(entry["last_daily_date"], "2026-06-20")
             self.assertEqual(entry["last_daily_usage"], 1.2)
+
+    def test_prepay_and_arrears_publish_to_dedicated_sensors(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_file = Path(tmpdir) / "sgcc_cache.json"
+            updator = CacheOnlySensorUpdator(cache_file)
+
+            updator.update_one_userid(
+                user_id="1234567890123",
+                balance=None,
+                last_daily_date=None,
+                last_daily_usage=None,
+                yearly_charge=None,
+                yearly_usage=None,
+                month_charge=None,
+                month_usage=None,
+                prepay_balance=127.5,
+                arrears=70.0,
+            )
+
+            self.assertNotIn(("balance", "_0123", 127.5, None), updator.calls)
+            self.assertIn(("delete", "sensor.electricity_charge_balance_0123"), updator.calls)
+            self.assertIn(("prepay", "_0123", 127.5), updator.calls)
+            self.assertIn(("arrears", "_0123", 70.0), updator.calls)
+            entry = json.loads(cache_file.read_text())["1234567890123"]
+            self.assertIsNone(entry["balance"])
+            self.assertEqual(entry["prepay_balance"], 127.5)
+            self.assertEqual(entry["arrears"], 70.0)
+
 
 
 class RestFailureSensorUpdator(SensorUpdator):
