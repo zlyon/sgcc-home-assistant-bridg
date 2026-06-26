@@ -42,41 +42,104 @@ class Scraper:
     def fetch_all(self, max_accounts: Optional[int] = None) -> list[AccountData]:
         """Navigate balance/usage views and return one AccountData per account.
 
-        Multi-account handling is index-based: discover visible account choices,
-        then select the same index on each business view.  For single-account
-        sessions it performs one bounded pass without opening selectors again.
+        Multi-account handling is deliberately inclusive:
+
+        * scrape the currently selected/default account first;
+        * then iterate every visible selector option by index;
+        * de-duplicate parsed accounts by account number.
+
+        Some SGCC/Element UI account selectors only list accounts that can be
+        switched to, excluding the currently selected account; others include
+        the current account but can render duplicate/near-identical display
+        text for multiple residential accounts.  Counting de-duplicated option
+        text would therefore under-count real accounts.
         """
         self._navigate(BALANCE_URL, "账户余额")
-        account_count = max(1, len(self._visible_account_options()))
-        if max_accounts is not None:
-            account_count = min(account_count, max_accounts)
+        selector_option_count = len(self._visible_account_options())
+        logging.info(f"Path B 账户候选: 当前账户 + {selector_option_count} 个下拉选项。")
 
         results: list[AccountData] = []
-        for index in range(account_count):
-            partials: list[AccountData] = []
+        seen_accounts: set[str] = set()
 
-            self._navigate(BALANCE_URL, "账户余额")
-            if account_count > 1:
-                self._select_account(index)
-            partials.append(self._parse_current_page())
+        current = self._fetch_current_account()
+        self._append_unique_result(results, seen_accounts, current)
+        if max_accounts is not None and len(results) >= max_accounts:
+            return results
 
-            self._navigate(ELECTRIC_USAGE_URL, "电量电费查询")
-            if account_count > 1:
-                self._select_account(index)
-            self._click_tab("月度电费")
-            partials.append(self._parse_current_page())
-            self._click_tab("日用电量")
-            self._expand_daily_range_to_30_days()
-            partials.append(self._parse_current_page())
-
-            data = merge_account_data(*partials)
-            results.append(data)
+        for index in range(selector_option_count):
+            data = self._fetch_selected_account(index)
+            self._append_unique_result(results, seen_accounts, data)
+            if max_accounts is not None and len(results) >= max_accounts:
+                break
         return results
 
     def fetch_one(self) -> AccountData:
         """Convenience wrapper for the current/default account."""
-        items = self.fetch_all(max_accounts=1)
-        return items[0] if items else AccountData(account=parse_account_data().account)
+        data = self._fetch_current_account()
+        return data if data is not None else AccountData(account=parse_account_data().account)
+
+    def _fetch_current_account(self) -> Optional[AccountData]:
+        return self._fetch_account(selection_index=None)
+
+    def _fetch_selected_account(self, index: int) -> Optional[AccountData]:
+        return self._fetch_account(selection_index=index)
+
+    def _fetch_account(self, selection_index: Optional[int]) -> Optional[AccountData]:
+        partials: list[AccountData] = []
+
+        self._navigate(BALANCE_URL, "账户余额")
+        if selection_index is not None and not self._select_account(selection_index):
+            logging.warning(f"Path B 无法选择账户下拉第 {selection_index + 1} 项，已跳过该候选。")
+            return None
+        partials.append(self._parse_current_page())
+        target_account_no = partials[-1].account.account_no
+
+        self._navigate(ELECTRIC_USAGE_URL, "电量电费查询")
+        if selection_index is not None:
+            current_account_no = self._current_account_no()
+            if target_account_no and current_account_no == target_account_no:
+                logging.info(f"Path B 电量电费页已保持账户: {mask_account_no(target_account_no)}")
+            elif not self._select_account(selection_index):
+                logging.warning(
+                    f"Path B 电量电费页无法再次选择账户下拉第 {selection_index + 1} 项，继续使用当前账户状态。"
+                )
+        self._click_tab("月度电费")
+        partials.append(self._parse_current_page())
+        self._click_tab("日用电量")
+        self._expand_daily_range_to_30_days()
+        partials.append(self._parse_current_page())
+
+        return merge_account_data(*partials)
+
+    def _append_unique_result(
+        self,
+        results: list[AccountData],
+        seen_accounts: set[str],
+        data: Optional[AccountData],
+    ) -> bool:
+        if data is None:
+            return False
+        identity = self._account_identity(data)
+        if identity and identity in seen_accounts:
+            logging.info(f"Path B 跳过重复账户候选: {mask_account_no(data.account.account_no)}")
+            return False
+        if identity:
+            seen_accounts.add(identity)
+        results.append(data)
+        return True
+
+    @staticmethod
+    def _account_identity(data: AccountData) -> Optional[str]:
+        account_no = data.account.account_no if data and data.account else ""
+        return account_no or None
+
+    def _current_account_no(self) -> str:
+        try:
+            snapshot = self._snapshot()
+            data = parse_account_data(store=snapshot.get("store"), components=snapshot.get("components"))
+            return data.account.account_no
+        except Exception:
+            return ""
 
     def _parse_current_page(self) -> AccountData:
         snapshot = self._snapshot()
@@ -363,12 +426,7 @@ class Scraper:
             except Exception:
                 continue
         self._close_popups()
-        # De-duplicate while preserving order.
-        result: list[str] = []
-        for text in texts:
-            if text not in result:
-                result.append(text)
-        return result
+        return texts
 
     def _select_account(self, index: int) -> bool:
         if not self._open_account_selector():

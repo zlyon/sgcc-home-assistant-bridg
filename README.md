@@ -83,7 +83,7 @@ image: ghcr.io/maribelhearm/sgcc-home-assistant-bridge:latest
 固定版本：
 
 ```yaml
-image: ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.1
+image: ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.2
 ```
 
 国内网络访问 GHCR 慢时，可以把 `image:` 换成阿里云 ACR 镜像：

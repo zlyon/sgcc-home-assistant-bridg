@@ -74,7 +74,101 @@ def _install_selenium_stub_if_missing():
 _install_selenium_stub_if_missing()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
+from model import Account, AccountData
 from scraper import Scraper
+
+
+class FetchAllAccountEnumerationTestCase(unittest.TestCase):
+    def test_fetch_all_keeps_duplicate_option_text_and_adds_current_account(self):
+        scraper = Scraper(driver=object(), wait_seconds=1, settle_seconds=0)
+        calls = []
+        scraper._navigate = lambda url, label: None
+        scraper._visible_account_options = lambda: ["民用", "民用"]
+
+        def fake_fetch_account(selection_index=None):
+            calls.append(selection_index)
+            account_no = {
+                None: "1234567891705",
+                0: "1234567891703",
+                1: "1234567891704",
+            }[selection_index]
+            return AccountData(account=Account(account_no=account_no))
+
+        scraper._fetch_account = fake_fetch_account
+
+        results = scraper.fetch_all()
+
+        self.assertEqual(calls, [None, 0, 1])
+        self.assertEqual([item.account.account_no for item in results], [
+            "1234567891705",
+            "1234567891703",
+            "1234567891704",
+        ])
+
+    def test_fetch_all_deduplicates_current_account_when_selector_includes_it(self):
+        scraper = Scraper(driver=object(), wait_seconds=1, settle_seconds=0)
+        scraper._navigate = lambda url, label: None
+        scraper._visible_account_options = lambda: ["当前", "其他"]
+
+        def fake_fetch_account(selection_index=None):
+            account_no = {
+                None: "1234567891705",
+                0: "1234567891705",
+                1: "1234567891703",
+            }[selection_index]
+            return AccountData(account=Account(account_no=account_no))
+
+        scraper._fetch_account = fake_fetch_account
+
+        results = scraper.fetch_all()
+
+        self.assertEqual([item.account.account_no for item in results], [
+            "1234567891705",
+            "1234567891703",
+        ])
+
+    def test_visible_account_options_does_not_deduplicate_equal_text(self):
+        class FakeElement:
+            def __init__(self, text):
+                self.text = text
+
+            def get_attribute(self, name):
+                return ""
+
+            def is_displayed(self):
+                return True
+
+        class FakeDriver:
+            def find_elements(self, by, value):
+                return [FakeElement("民用"), FakeElement("民用")]
+
+            def find_element(self, by, value):
+                raise Exception("no body")
+
+        scraper = Scraper(driver=FakeDriver(), wait_seconds=1, settle_seconds=0)
+        scraper._open_account_selector = lambda: True
+
+        self.assertEqual(scraper._visible_account_options(), ["民用", "民用"])
+
+    def test_fetch_selected_account_does_not_reselect_when_route_preserves_account(self):
+        scraper = Scraper(driver=object(), wait_seconds=1, settle_seconds=0)
+        selected = []
+        scraper._navigate = lambda url, label: None
+        scraper._select_account = lambda index: selected.append(index) or True
+        scraper._click_tab = lambda text: True
+        scraper._expand_daily_range_to_30_days = lambda: True
+        scraper._current_account_no = lambda: "1234567891703"
+        snapshots = iter([
+            AccountData(account=Account(account_no="1234567891703")),
+            AccountData(account=Account(account_no="1234567891703")),
+            AccountData(account=Account(account_no="1234567891703")),
+        ])
+        scraper._parse_current_page = lambda: next(snapshots)
+
+        data = scraper._fetch_selected_account(1)
+
+        self.assertEqual(data.account.account_no, "1234567891703")
+        self.assertEqual(selected, [1])
 
 
 class DailyRangeWaitTestCase(unittest.TestCase):
