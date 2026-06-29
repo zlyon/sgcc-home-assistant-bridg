@@ -107,7 +107,7 @@ body:
     id: config
     attributes:
       label: 脱敏后的关键配置
-      description: 例如 LOGIN_FALLBACK、LLM_BASE_URL、LLM_MODEL、MQTT_HOST、MQTT_DISCOVERY_PREFIX、JOB_START_TIME。不要贴密码/token/key。
+      description: 例如 SGCC_BROWSER_MODE、LOGIN_FALLBACK、LLM_BASE_URL、LLM_MODEL、MQTT_HOST、MQTT_DISCOVERY_PREFIX、JOB_START_TIME。不要贴密码/token/key。
       render: text
     validations:
       required: false

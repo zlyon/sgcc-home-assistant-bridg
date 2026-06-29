@@ -13,7 +13,9 @@ schedule / startup
   -> account login/session check
        password + Tencent click captcha via multimodal LLM
        qrcode fallback only when configured/needed
-  -> per-run headful Chromium under Xvfb
+  -> browser mode
+       Docker Compose default: official Google Chrome sidecar + CDP attach
+       compatible fallback: Debian Chromium + Xvfb + ChromeDriver
   -> Path B scraper
        Vuex $store snapshot + component data
   -> parser / normalized AccountData model
@@ -37,32 +39,32 @@ docker compose build
 docker compose up -d
 ```
 
-默认 compose：
+默认 compose 会启动两个服务：
 
-- 使用 `Dockerfile-for-github-action` 构建镜像。
-- 读取 `.env`。
-- 使用 host 网络访问 Home Assistant / MQTT broker。
-- 挂载本机 `/data` 到容器 `/data`。
-- SQLite 默认写入 `/data/sgcc.sqlite3`。
-- 通过 `restart: unless-stopped` 常驻调度。
+- `sgcc_browser`：使用 `Dockerfile.browser` 构建，安装官方 `google-chrome-stable`，提供 `/start`、`/stop`、`/status` 管理接口。
+- `sgcc_electricity_app`：使用 `Dockerfile-for-github-action` 构建，读取 `.env`，负责登录、抓取、解析和 HA/MQTT 发布。
+
+默认运行方式：
+
+- `SGCC_BROWSER_MODE=browser-service`。
+- `sgcc_browser` 通过 host 网络监听 `127.0.0.1:39222` 管理接口和 `127.0.0.1:19222` Chrome CDP。
+- 主程序每轮登录/抓取前调用 sidecar `/start`，Selenium 通过 CDP attach；任务结束后默认调用 `/stop` 关闭 Chrome。
+- Chrome profile 默认挂载到 `/data/sgcc-browser-profile`；app 数据、SQLite 和错误现场仍使用 `/data`。
+- 通过 `restart: unless-stopped` 常驻调度。常驻的是主程序和轻量 sidecar 管理器，不是完整 Chrome 进程。
 
 ### GHCR 镜像
 
 `latest` 跟随 GitHub `main` 分支发布。需要固定构建时，可以使用版本 tag 或 `sha-xxxxxxx` tag。
 
+使用 GHCR 时保留项目 `docker-compose.yml` 里的 `sgcc_browser` sidecar 服务，只把 `sgcc_electricity_app` 服务从 `build` 改成镜像：
+
 ```yaml
 services:
   sgcc_electricity_app:
     image: ghcr.io/maribelhearm/sgcc-home-assistant-bridge:latest
-    container_name: sgcc_electricity_arc
-    env_file:
-      - .env
-    network_mode: host
-    volumes:
-      - /data:/data
-    restart: unless-stopped
-    init: true
 ```
+
+`sgcc_browser` 仍使用 `Dockerfile.browser` 本地构建，里面安装官方 `google-chrome-stable`。
 
 固定版本可以使用：
 
@@ -72,13 +74,15 @@ ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.2
 
 ### 国内镜像：阿里云 ACR
 
-国内网络访问 GHCR 慢时，Docker Compose 可以直接换成阿里云 ACR 镜像。该仓库为公开仓库，普通拉取不需要登录：
+国内网络访问 GHCR 慢时，Docker Compose 可以把 `sgcc_electricity_app` 镜像换成阿里云 ACR。该仓库为公开仓库，普通拉取不需要登录：
 
 ```yaml
 services:
   sgcc_electricity_app:
     image: crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.com/maribelhearm/sgcc_ha:latest
 ```
+
+`sgcc_browser` sidecar 仍按本地 `Dockerfile.browser` 构建。
 
 镜像 tag 规则：
 
@@ -100,6 +104,35 @@ crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.com/maribelhearm/sgcc_ha:
 本仓库默认分支为 `main`。CI 会同时发布 GHCR 与阿里云 ACR；当前已验证 ACR `latest` manifest 可公开读取。
 
 Home Assistant Add-on / App 当前默认仍使用 GHCR 镜像。后续如果需要完整国内 Add-on 安装链路，可以单独维护国内 Add-on 仓库或 `cn` 分支，把 `config.yaml` 的 `image` 指向 ACR。
+
+### 浏览器模式
+
+项目通过 `.env` 的 `SGCC_BROWSER_MODE` 切换浏览器运行方式：
+
+| 模式 | 适用场景 | 行为 |
+| --- | --- | --- |
+| `browser-service` | Docker Compose 默认；推荐给群晖 NAS / x86 小主机 / Linux Server | `sgcc_browser` sidecar 内安装官方 Google Chrome；抓取时按需启动 Chrome，app 通过 CDP attach，用完关闭 Chrome |
+| `local` | 兼容旧部署 / Home Assistant Add-on | app 容器内 Debian Chromium + Xvfb + ChromeDriver |
+| `host-cdp` / `cdp` | 高级调试或真实桌面测试 | app 连接外部已启动的 Chrome CDP 地址，不负责启动/关闭 Chrome |
+
+推荐配置：
+
+```env
+SGCC_BROWSER_MODE=browser-service
+SGCC_CDP_ADDRESS=127.0.0.1:19222
+SGCC_BROWSER_SERVICE_URL=http://127.0.0.1:39222
+SGCC_BROWSER_SERVICE_STOP_ON_RELEASE=true
+SGCC_BROWSER_SERVICE_PROFILE_HOST=/data/sgcc-browser-profile
+SGCC_BROWSER_SERVICE_PROFILE=/data/sgcc-browser-profile
+```
+
+`browser-service` 的目标是把登录环境从容器内 Debian Chromium 换成官方 Google Chrome，同时避免完整 Chrome 长期常驻。Chrome 关闭后 profile 仍保留，但国网页面本身不保证浏览器关闭后登录态可复用，所以不要把它当成免登录方案。
+
+如需回滚旧模式：
+
+```env
+SGCC_BROWSER_MODE=local
+```
 
 ### Home Assistant Add-on / App
 
@@ -153,7 +186,13 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `SGCC_DB_PATH` | SQLite 数据库路径，默认 `/data/sgcc.sqlite3`。 |
 | `SCRAPER_SETTLE_SECONDS` | Path B 抓取等待 Vuex/组件数据稳定的秒数。 |
 | `REPUBLISH_INTERVAL_MINUTES` | 已有数据重发布或补抓的间隔分钟数。 |
-| `SGCC_BROWSER_PROFILE` | Chromium 用户数据目录，默认建议放在 `/data/chrome-profile`。 |
+| `SGCC_BROWSER_MODE` | 浏览器模式，Docker Compose 默认 `browser-service`；旧模式可设 `local`。 |
+| `SGCC_CDP_ADDRESS` | `browser-service` / `host-cdp` 使用的 Chrome DevTools 地址，默认 `127.0.0.1:19222`。 |
+| `SGCC_BROWSER_SERVICE_URL` | sidecar 管理 API，默认 `http://127.0.0.1:39222`。 |
+| `SGCC_BROWSER_SERVICE_STOP_ON_RELEASE` | `browser-service` 每轮任务结束后是否关闭 Chrome，默认 `true`。 |
+| `SGCC_BROWSER_SERVICE_PROFILE_HOST` | sidecar Chrome profile 的宿主机挂载路径，默认 `/data/sgcc-browser-profile`。 |
+| `SGCC_BROWSER_SERVICE_PROFILE` | sidecar 容器内 Chrome profile 路径，默认 `/data/sgcc-browser-profile`。 |
+| `SGCC_BROWSER_PROFILE` | `local` 模式 Chromium 用户数据目录，默认建议放在 `/data/chrome-profile`。 |
 
 `example.env` 还包含少量抓取等待参数，可在网络慢、页面加载不稳定或硬件性能较弱时微调。
 
@@ -266,6 +305,8 @@ examples/lovelace-sgcc-electricity.yaml
 - 登录页资源或腾讯验证码脚本没完整加载。
 - 当前账号、IP、会话组合被风控。
 
+Docker Compose 部署优先使用 `SGCC_BROWSER_MODE=browser-service`：它把浏览器换成 sidecar 内官方 Google Chrome，并按需启动/关闭 Chrome。
+
 项目检测到 RK001、操作过于频繁、验证码通过后仍停留登录页等情况后，会停止本轮立即重试，并写入 `/data/sgcc_login_cooldown.json` 冷却状态。冷却期间定时任务不会继续触发真实国网登录；已有 HA/MQTT 数据仍会优先通过缓存重发布维持展示。
 
 ### 验证码一直被识别为 slider
@@ -317,7 +358,7 @@ docker manifest inspect crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.c
 | 方向 | 上游项目 | 本项目 |
 | --- | --- | --- |
 | 登录路径 | 已有账号密码登录、LLM 视觉验证码和二维码兜底 | 拆出 `login.py` / `browser.py`，增加登录态判定、受控导航、错误现场保存和脱敏日志；二维码只作为 fallback。 |
-| 浏览器运行 | Selenium + Chrome/Chromium | Xvfb 下有头 Chromium、持久 profile、页面/脚本超时控制、每轮用完释放。 |
+| 浏览器运行 | Selenium + Chrome/Chromium | Docker Compose 默认官方 Google Chrome sidecar + CDP attach，兼容旧的 Debian Chromium + Xvfb + ChromeDriver；页面/脚本超时控制，每轮用完释放。 |
 | 抓取方式 | 页面取值与 Vue component data / Vue state 辅助解析 | 将 Vue/Vuex 取数主路径化，读取 store snapshot + 组件 data，交给 `parser.py` 合并归一。 |
 | 数据覆盖 | 已覆盖余额、预付费/欠费、日/月/年用电、月峰/平/谷/尖等 | 统一归一、去重、落库和重发布这些业务数据，提升恢复与排障体验。 |
 | 存储模型 | 可选 SQLite/MySQL，表结构偏每日用电与 key-value 扩展 | 规范化 SQLite fact store：账户、余额、日/月/年、抓取 run、会话检查、发布状态。 |
@@ -326,4 +367,4 @@ docker manifest inspect crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.c
 
 ## 10. 关键词
 
-SGCC、State Grid、国家电网、网上国网、95598、Home Assistant、MQTT Discovery、SQLite、Selenium、Chromium、captcha、LLM、electricity、energy。
+SGCC、State Grid、国家电网、网上国网、95598、Home Assistant、MQTT Discovery、SQLite、Selenium、Google Chrome、Chromium、CDP、captcha、LLM、electricity、energy。

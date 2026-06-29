@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Docker Compose 新增官方 Google Chrome sidecar 浏览器模式，默认 `SGCC_BROWSER_MODE=browser-service`，主程序通过 CDP attach，Chrome 按需启动并在任务结束后关闭。
+
+### Docs
+
+- 补充 `browser-service` / `local` / `host-cdp` 三种浏览器模式说明，以及 RK001 场景下的配置切换方式。
+
 ## [v0.1.2] - 2026-06-27
 
 ### Fixed

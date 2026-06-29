@@ -92,7 +92,7 @@ LLM_MODEL    = ep-xxxxxxxx
 启动后程序会：
 
 - 读取 Add-on 配置。
-- 启动 Xvfb + Chromium。
+- 启动内置 Xvfb + Chromium。
 - 尝试从 SQLite 缓存恢复数据。
 - 缓存不可用时登录国网页面抓取数据。
 - 通过 MQTT Discovery / REST 发布到 Home Assistant。
@@ -148,3 +148,4 @@ MQTT Discovery 正常后，Home Assistant 会出现类似下面的设备：
 - 查看 Add-on 日志。
 - 查看 `/data/errors` 中的错误截图、HTML 和 metadata。
 - 如果出现 `RK001`，通常是 95598 / 腾讯验证码风控命中，本项目会停止本轮，避免反复打账号。
+- Docker Compose 用户可以改用 `SGCC_BROWSER_MODE=browser-service`，使用官方 Google Chrome sidecar 按需启动模式；Home Assistant Add-on 当前仍使用内置 Chromium 模式。

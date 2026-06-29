@@ -19,6 +19,7 @@
 - 通过 MQTT Discovery 在 Home Assistant 自动生成设备和实体。
 - 保留 REST states API 兼容发布。
 - 支持 Docker Compose、GHCR 预构建镜像和 Home Assistant OS/Supervised Add-on。
+- Docker Compose 默认提供官方 Google Chrome sidecar 模式，减少 Debian Chromium + Xvfb 指纹带来的 RK001 风险。
 - LLM 验证码调用保持 OpenAI 兼容接口，也兼容火山方舟 / 豆包 `ARK_*` 配置写法。
 - 无人值守模式默认每日一次真实登录；命中 RK001/验证码风控时会熔断冷却，避免连续重试打账号。
 
@@ -74,7 +75,7 @@ docker compose build
 docker compose up -d
 ```
 
-或使用 GHCR 镜像，把 `docker-compose.yml` 中的 `build` 改成：
+或使用 GHCR 镜像：只把 `sgcc_electricity_app` 服务里的 `build` 改成 `image`；`sgcc_browser` sidecar 保持用 `Dockerfile.browser` 本地构建。
 
 ```yaml
 image: ghcr.io/maribelhearm/sgcc-home-assistant-bridge:latest
@@ -86,7 +87,7 @@ image: ghcr.io/maribelhearm/sgcc-home-assistant-bridge:latest
 image: ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.2
 ```
 
-国内网络访问 GHCR 慢时，可以把 `image:` 换成阿里云 ACR 镜像：
+国内网络访问 GHCR 慢时，可以把 `sgcc_electricity_app` 的 `image:` 换成阿里云 ACR 镜像：
 
 ```yaml
 image: crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.com/maribelhearm/sgcc_ha:latest
@@ -108,7 +109,44 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 
 当前 Add-on 预构建镜像先支持 `amd64`，已在 HAOS 18.0 / Supervisor 2026.06.2 验证安装和启动。详细步骤见 [Add-on 安装教程](ha_addons_doc/Add-on教程.md)。
 
-### 4. 去 Home Assistant 看实体
+### 4. 浏览器模式
+
+Docker Compose 默认使用 `browser-service`：
+
+```env
+SGCC_BROWSER_MODE=browser-service
+SGCC_CDP_ADDRESS=127.0.0.1:19222
+SGCC_BROWSER_SERVICE_URL=http://127.0.0.1:39222
+SGCC_BROWSER_SERVICE_STOP_ON_RELEASE=true
+```
+
+默认 compose 会启动两个服务：
+
+- `sgcc_browser`：sidecar 容器，安装官方 `google-chrome-stable`，负责按需启动/停止 Chrome。
+- `sgcc_electricity_app`：主程序容器，运行登录、抓取、解析和 HA/MQTT 发布，通过 CDP 连接 sidecar Chrome。
+
+| 模式 | 适用场景 | 行为 |
+|---|---|---|
+| `browser-service` | 推荐给群晖 NAS / x86 小主机 / Linux Server | `sgcc_browser` 内运行官方 Google Chrome；抓取时按需启动 Chrome，app 通过 CDP attach，用完关闭 Chrome |
+| `local` | 兼容旧部署 / Home Assistant Add-on | app 容器内 Debian Chromium + Xvfb + ChromeDriver |
+| `host-cdp` / `cdp` | 高级调试或真实桌面测试 | app 连接外部已启动的 Chrome CDP 地址，不负责启动/关闭 Chrome |
+
+`browser-service` 不是让完整 Chrome 长期常驻：常驻的是轻量 sidecar 管理器、Xvfb/noVNC；Google Chrome 本体在登录/抓取前启动，任务结束后默认关闭。profile 会挂载保存到 `${SGCC_BROWSER_SERVICE_PROFILE_HOST:-/data/sgcc-browser-profile}`，但国网页面关闭浏览器后不保证免登录。
+
+遇到 RK001 时，优先确认已切到 `browser-service` 并重建启动：
+
+```bash
+docker compose build
+docker compose up -d
+```
+
+如果新模式不适合当前环境，可以回滚：
+
+```env
+SGCC_BROWSER_MODE=local
+```
+
+### 5. 去 Home Assistant 看实体
 
 MQTT Discovery 正常后，HA 会出现一个类似 `国网电费 ****1234` 的设备，下面自动挂传感器。
 
@@ -160,7 +198,7 @@ examples/lovelace-sgcc-electricity.yaml
 
 **RK001 是什么？**
 
-通常不像普通网络超时，更像 95598 / 腾讯验证码风控命中。项目会保存错误现场；无人值守任务会停止本轮重试并进入冷却，避免无意义反复打账号。
+通常不像普通网络超时，更像 95598 / 腾讯验证码风控命中。项目会保存错误现场；无人值守任务会停止本轮重试并进入冷却，避免无意义反复打账号。Docker Compose 部署建议先使用 `SGCC_BROWSER_MODE=browser-service`。
 
 **一直识别成 slider 怎么办？**
 
@@ -207,24 +245,3 @@ examples/lovelace-sgcc-electricity.yaml
 ## 许可证
 
 Apache License 2.0。详见 [LICENSE](LICENSE) 与 [NOTICE](NOTICE)。
-
-## 浏览器模式
-
-项目支持三种浏览器模式，通过 `.env` 的 `SGCC_BROWSER_MODE` 切换：
-
-| 模式 | 适用场景 | 行为 |
-|---|---|---|
-| `browser-service` | 推荐给群晖 NAS / x86 小主机 / Linux Server | `sgcc_browser` sidecar 内安装官方 Google Chrome；抓取时按需启动 Chrome，app 通过 CDP attach，用完关闭 Chrome |
-| `local` | 兼容旧部署 | app 容器内 Debian Chromium + Xvfb + ChromeDriver |
-| `host-cdp` / `cdp` | 高级调试或真实桌面测试 | app 连接外部已启动的 Chrome CDP 地址，不负责启动/关闭 Chrome |
-
-默认推荐：
-
-```env
-SGCC_BROWSER_MODE=browser-service
-SGCC_CDP_ADDRESS=127.0.0.1:19222
-SGCC_BROWSER_SERVICE_URL=http://127.0.0.1:39222
-SGCC_BROWSER_SERVICE_STOP_ON_RELEASE=true
-```
-
-`browser-service` 不是让 Chrome 长期常驻：常驻的是轻量 sidecar 管理器/Xvfb/noVNC，Google Chrome 本体在每次登录/抓取前启动，任务结束后关闭。遇到 RK001 时优先切到 `browser-service` 或 `host-cdp` 验证，不建议靠反复重试验证码硬撞。
