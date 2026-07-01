@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest import mock
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -130,7 +131,9 @@ class MqttPublisherTestCase(unittest.TestCase):
             ],
         )
 
-        self.assertTrue(publisher.publish_account_data(data))
+        with mock.patch.object(mqtt_publisher, "datetime") as mock_datetime:
+            mock_datetime.now.return_value = datetime(2026, 6, 18)
+            self.assertTrue(publisher.publish_account_data(data))
         client = FakeClient.instances[-1]
         all_text = "\n".join(f"{topic} {payload}" for topic, payload, _ in client.published)
         self.assertNotIn(account_no, all_text)

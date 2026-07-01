@@ -147,6 +147,22 @@ SGCC_BROWSER_SERVICE_PROFILE=/data/sgcc-browser-profile
 
 `browser-service` 的目标是把登录环境从容器内 Debian Chromium 换成官方 Google Chrome，同时避免完整 Chrome 长期常驻。Compose 常驻主程序和轻量 sidecar；Add-on 常驻主程序、Xvfb 和轻量 browser manager。两种部署都只在抓取/登录前拉起 Chrome 本体，并在任务结束后默认关闭。Chrome 关闭后 profile 仍保留，但国网页面本身不保证浏览器关闭后登录态可复用，所以不要把它当成免登录方案。
 
+#### 自定义 Docker network 访问 sidecar
+
+默认 Compose 使用 `network_mode: host`，app 直接访问 `127.0.0.1:39222` 和 `127.0.0.1:19222`。少数用户如果改成自定义 Docker network，并希望通过服务名访问 browser sidecar，需要同时开放 browser manager 和可选 CDP 代理：
+
+```env
+SGCC_BROWSER_SERVICE_HOST=0.0.0.0
+SGCC_BROWSER_SERVICE_URL=http://sgcc_browser:39222
+SGCC_BROWSER_CDP_HOST=0.0.0.0
+SGCC_BROWSER_CDP_PORT=19222
+SGCC_BROWSER_CDP_INTERNAL_PORT=19223
+SGCC_BROWSER_CDP_FORWARD_ENABLED=true
+SGCC_CDP_ADDRESS=sgcc_browser:19222
+```
+
+`SGCC_BROWSER_CDP_FORWARD_ENABLED` 默认关闭。开启后 Chrome 本体使用 `SGCC_BROWSER_CDP_INTERNAL_PORT` 作为内部 loopback CDP 端口，browser-service 再在 `SGCC_BROWSER_CDP_HOST:SGCC_BROWSER_CDP_PORT` 上提供内置代理，兼容新版 Chrome 强制 `127.0.0.1` 监听的行为。只在私有 Docker network 中按需开启，不建议暴露到公网或不可信网络。
+
 如需回滚旧模式：
 
 ```env
@@ -211,6 +227,8 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `SGCC_CDP_ADDRESS` | `browser-service` / `host-cdp` 使用的 Chrome DevTools 地址，默认 `127.0.0.1:19222`。 |
 | `SGCC_BROWSER_SERVICE_URL` | browser manager 管理 API，Compose 指向 sidecar，Add-on 指向同容器内嵌服务，默认 `http://127.0.0.1:39222`。 |
 | `SGCC_BROWSER_SERVICE_STOP_ON_RELEASE` | `browser-service` 每轮任务结束后是否关闭 Chrome，默认 `true`。 |
+| `SGCC_BROWSER_CDP_FORWARD_ENABLED` | 可选高级开关，默认 `false`；自定义 Docker network 下需要通过服务名访问 CDP 时才开启内置代理。 |
+| `SGCC_BROWSER_CDP_INTERNAL_PORT` | 内置 CDP 代理启用时 Chrome 本体使用的内部 loopback 端口，需与 `SGCC_BROWSER_CDP_PORT` 不同，默认建议 `19223`。 |
 | `SGCC_BROWSER_SERVICE_PROFILE_HOST` | Compose sidecar Chrome profile 的宿主机挂载路径，默认 `/data/sgcc-browser-profile`；Add-on 不使用这个宿主机挂载变量。 |
 | `SGCC_BROWSER_SERVICE_PROFILE` | browser-service 容器内/ Add-on 内 Chrome profile 路径，默认 `/data/sgcc-browser-profile`。 |
 | `SGCC_BROWSER_PROFILE` | `local` 模式 Chromium 用户数据目录，默认建议放在 `/data/chrome-profile`。 |
