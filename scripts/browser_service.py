@@ -149,6 +149,16 @@ def _split_http_response(raw: bytes) -> tuple[bytes, bytes, list[tuple[str, str]
     return status_line, body, headers
 
 
+def _response_status_code(status_line: bytes) -> int | None:
+    try:
+        parts = status_line.split(None, 2)
+        if len(parts) < 2:
+            return None
+        return int(parts[1])
+    except (TypeError, ValueError):
+        return None
+
+
 def _build_http_response(status_line: bytes, headers: list[tuple[str, str]], body: bytes) -> bytes:
     lines = [status_line]
     skipped = {"content-length", "transfer-encoding", "connection"}

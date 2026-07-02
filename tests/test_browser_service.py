@@ -55,6 +55,14 @@ class BrowserServiceConfigTestCase(unittest.TestCase):
         self.assertIn(b"ws://sgcc_browser:19222/devtools/browser/abc", rewritten)
         self.assertNotIn(b"127.0.0.1:19223", rewritten)
 
+    def test_response_status_code_parses_websocket_upgrade(self):
+        browser_service = self._load_browser_service()
+
+        self.assertEqual(browser_service._response_status_code(b"HTTP/1.1 101 Switching Protocols"), 101)
+        self.assertEqual(browser_service._response_status_code(b"HTTP/1.1 404 Not Found"), 404)
+        self.assertIsNone(browser_service._response_status_code(b"HTTP/1.1"))
+        self.assertIsNone(browser_service._response_status_code(b"not-http"))
+
     def test_cdp_forward_rejects_same_public_and_internal_port(self):
         browser_service = self._load_browser_service(
             SGCC_BROWSER_CDP_PORT="19222",
