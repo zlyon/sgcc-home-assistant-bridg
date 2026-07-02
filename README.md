@@ -220,7 +220,7 @@ Lovelace 示例在：
 examples/lovelace-cards/
 ```
 
-内置三套卡片示例：消逝 / xiaoshi 原版风格预设、消逝风格优化版、当前项目自用卡片。不会自动安装。已有 `state_grid` 仪表盘 YAML 可用 `tools/convert_state_grid_lovelace.py` 做字段替换。
+内置三套卡片示例：消逝 / xiaoshi 原版风格预设、消逝风格优化版、当前项目自用卡片。不会自动安装。截图见 `assets/lovelace-cards/`。已有 `state_grid` 仪表盘 YAML 可用 `tools/convert_state_grid_lovelace.py` 做字段替换。
 
 ## 常见问题
 

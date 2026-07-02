@@ -8,6 +8,14 @@
 - `sgcc-electricity-card-xiaoshi-style.yaml`：消逝风格优化版。使用本项目 `custom:sgcc-electricity-card`，直接读取本项目实体，配置了 `variant: xiaoshi`。
 - `sgcc-electricity-card.yaml`：当前项目自用卡片，使用本项目 `custom:sgcc-electricity-card` 默认样式。
 
+## 截图示例
+
+| 示例 | 截图 |
+| --- | --- |
+| 消逝 / xiaoshi 原版风格预设 | <img src="../../assets/lovelace-cards/sgcc-electricity-card-xiaoshi-original.png" width="360" alt="消逝原版风格"> |
+| 消逝风格优化版 | <img src="../../assets/lovelace-cards/sgcc-electricity-card-xiaoshi-style.png" width="360" alt="消逝风格优化版"> |
+| 当前项目自用卡片 | <img src="../../assets/lovelace-cards/sgcc-electricity-card.png" width="360" alt="当前项目自用卡片"> |
+
 三份 YAML 都是已经替换成本项目实体字段的预设。需要把：
 
 ```text
