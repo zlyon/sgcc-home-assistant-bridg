@@ -279,11 +279,84 @@ class MqttPublisherTestCase(unittest.TestCase):
 
         self.assertEqual(config_messages["homeassistant/sensor/sgcc_xxxxxxxxx0123/balance/config"], "")
         self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/balance/config", active_config_topics)
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_valley/config", config_messages)
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_flat/config", config_messages)
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_peak/config", config_messages)
+        self.assertNotIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/month_tip/config", config_messages)
         self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/prepay_balance/config", active_config_topics)
         self.assertIn("homeassistant/sensor/sgcc_xxxxxxxxx0123/arrears/config", active_config_topics)
         self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/prepay_balance/state"], "127.5")
         self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/arrears/state"], "70.0")
 
+    def test_month_tou_falls_back_to_latest_available_month(self):
+        account_no = "1234567890123"
+        cfg = FetcherConfig(
+            MQTT_HOST="broker.local",
+            MQTT_DISCOVERY_PREFIX="homeassistant",
+        )
+        publisher = MqttPublisher(cfg)
+        self.assertTrue(publisher.connect())
+
+        data = AccountData(
+            account=Account(account_no=account_no),
+            monthly=[
+                MonthlyReading(
+                    account_no=account_no,
+                    year_month="2026-05",
+                    total_usage_kwh=56.7,
+                    total_charge_cny=23.45,
+                ),
+            ],
+            daily=[
+                DailyReading(
+                    account_no=account_no,
+                    date="2026-06-29",
+                    total_usage_kwh=6.5,
+                    valley_usage_kwh=1.0,
+                    flat_usage_kwh=2.0,
+                    peak_usage_kwh=3.0,
+                    tip_usage_kwh=0.5,
+                ),
+                DailyReading(
+                    account_no=account_no,
+                    date="2026-06-30",
+                    total_usage_kwh=7.5,
+                    valley_usage_kwh=1.5,
+                    flat_usage_kwh=2.5,
+                    peak_usage_kwh=3.5,
+                    tip_usage_kwh=0.0,
+                ),
+            ],
+        )
+
+        self.assertTrue(publisher.publish_account_data(data))
+        config_messages = {
+            topic: json.loads(payload)
+            for topic, payload, _ in FakeClient.instances[-1].published
+            if topic.endswith("/config") and payload
+        }
+        state_messages = {
+            topic: payload
+            for topic, payload, _ in FakeClient.instances[-1].published
+            if topic.endswith("/state")
+        }
+
+        month_valley_topic = "homeassistant/sensor/sgcc_xxxxxxxxx0123/month_valley/config"
+        self.assertIn(month_valley_topic, config_messages)
+        self.assertEqual(state_messages["sgcc/sgcc_xxxxxxxxx0123/month_valley/state"], "2.5")
+        tou_attrs = json.loads(
+            next(
+                payload
+                for topic, payload, _ in FakeClient.instances[-1].published
+                if topic == "sgcc/sgcc_xxxxxxxxx0123/month_valley/attributes"
+            )
+        )
+        self.assertEqual(tou_attrs["month"], "2026-06")
+        self.assertEqual(tou_attrs["daily_count"], 2)
+        self.assertIn(tou_attrs["source"], {
+            "daily_readings_current_month",
+            "daily_readings_latest_available_month",
+        })
 
     def test_publish_account_data_rejects_account_without_business_values(self):
         account_no = "1234567890123"

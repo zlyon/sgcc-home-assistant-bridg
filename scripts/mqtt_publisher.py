@@ -96,9 +96,17 @@ class MqttPublisher:
             for spec in self._sensor_specs(account_data, masked, device):
                 value = spec.pop("value")
                 key = spec.pop("key")
+                delete_when_none = spec.pop("delete_when_none", True)
                 state_topic = f"sgcc/{node}/{key}/state"
                 config_topic = f"{self.discovery_prefix}/sensor/{node}/{key}/config"
                 if value is None:
+                    if not delete_when_none:
+                        # Some stable aggregate sensors may be temporarily empty
+                        # around a month boundary before the first daily reading
+                        # for the new month arrives.  Keep their retained
+                        # discovery config intact instead of deleting the HA
+                        # entity and breaking dashboards that reference it.
+                        continue
                     # MQTT Discovery retained configs without matching states leave
                     # Home Assistant with unknown/unavailable entities.  Publish an
                     # empty retained config to remove stale entities from earlier
@@ -202,6 +210,7 @@ class MqttPublisher:
                 "key": "month_valley",
                 "name": f"月度谷时电量 {masked}",
                 "value": month_tou["valley"],
+                "delete_when_none": False,
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
@@ -211,6 +220,7 @@ class MqttPublisher:
                 "key": "month_flat",
                 "name": f"月度平时电量 {masked}",
                 "value": month_tou["flat"],
+                "delete_when_none": False,
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
@@ -220,6 +230,7 @@ class MqttPublisher:
                 "key": "month_peak",
                 "name": f"月度峰时电量 {masked}",
                 "value": month_tou["peak"],
+                "delete_when_none": False,
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
@@ -229,6 +240,7 @@ class MqttPublisher:
                 "key": "month_tip",
                 "name": f"月度尖时电量 {masked}",
                 "value": month_tou["tip"],
+                "delete_when_none": False,
                 "unit_of_measurement": "kWh",
                 "device_class": "energy",
                 "state_class": "measurement",
@@ -283,12 +295,12 @@ class MqttPublisher:
 
     @staticmethod
     def _tou_attributes(rows: list[DailyReading]) -> dict[str, Any]:
-        current_month_prefix = datetime.now().strftime("%Y-%m")
-        current_rows = [row for row in rows if str(row.date or "")[:7] == current_month_prefix]
+        month_prefix = MqttPublisher._tou_month_prefix(rows)
+        current_rows = [row for row in rows if str(row.date or "")[:7] == month_prefix]
         return {
-            "month": current_month_prefix,
+            "month": month_prefix,
             "daily_count": len(current_rows),
-            "source": "daily_readings_current_month",
+            "source": "daily_readings_current_month" if month_prefix == datetime.now().strftime("%Y-%m") else "daily_readings_latest_available_month",
         }
 
     @staticmethod
@@ -432,8 +444,8 @@ class MqttPublisher:
 
     @staticmethod
     def _month_tou(rows: list[DailyReading]) -> dict[str, Optional[float]]:
-        current_month_prefix = datetime.now().strftime("%Y-%m")
-        current_rows = [row for row in rows if str(row.date or "")[:7] == current_month_prefix]
+        month_prefix = MqttPublisher._tou_month_prefix(rows)
+        current_rows = [row for row in rows if str(row.date or "")[:7] == month_prefix]
         if not current_rows:
             return {"valley": None, "flat": None, "peak": None, "tip": None}
         return {
@@ -442,6 +454,14 @@ class MqttPublisher:
             "peak": sum(row.peak_usage_kwh or 0 for row in current_rows),
             "tip": sum(row.tip_usage_kwh or 0 for row in current_rows),
         }
+
+    @staticmethod
+    def _tou_month_prefix(rows: list[DailyReading]) -> str:
+        current_month_prefix = datetime.now().strftime("%Y-%m")
+        if any(str(row.date or "")[:7] == current_month_prefix for row in rows):
+            return current_month_prefix
+        dated_months = sorted({str(row.date or "")[:7] for row in rows if str(row.date or "")[:7]})
+        return dated_months[-1] if dated_months else current_month_prefix
 
     @staticmethod
     def _safe_topic_part(value: str) -> str:
