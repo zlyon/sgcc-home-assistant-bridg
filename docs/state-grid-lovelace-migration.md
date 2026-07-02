@@ -45,7 +45,7 @@ examples/lovelace-cards/sgcc-electricity-card.yaml
 
 - `sgcc-electricity-card-xiaoshi-original.yaml` 是消逝 / xiaoshi 原版风格预设，已替换成本项目实体字段；
 - `sgcc-electricity-card-xiaoshi-style.yaml` 是本项目字段适配的消逝风格卡片；
-- `sgcc-electricity-card.yaml` 是当前项目自用卡片。
+- `sgcc-electricity-card.yaml` 是当前自用 Lovelace 页面配置，来自 `/sgcc-electricity/overview`。
 
 截图示例：
 
@@ -53,4 +53,4 @@ examples/lovelace-cards/sgcc-electricity-card.yaml
 | --- | --- |
 | 消逝 / xiaoshi 原版风格预设 | <img src="../assets/lovelace-cards/sgcc-electricity-card-xiaoshi-original.png" width="360" alt="消逝原版风格"> |
 | 消逝风格优化版 | <img src="../assets/lovelace-cards/sgcc-electricity-card-xiaoshi-style.png" width="360" alt="消逝风格优化版"> |
-| 当前项目自用卡片 | <img src="../assets/lovelace-cards/sgcc-electricity-card.png" width="360" alt="当前项目自用卡片"> |
+| 当前自用卡片（overview） | <img src="../assets/lovelace-cards/sgcc-electricity-card.png" width="360" alt="当前自用卡片 overview"> |
