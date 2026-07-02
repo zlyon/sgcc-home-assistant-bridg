@@ -314,6 +314,9 @@ SGCC_QRCODE_FALLBACK_UNATTENDED=false
 示例文件：
 
 ```text
+examples/lovelace-cards/sgcc-electricity-card-xiaoshi-original.yaml
+examples/lovelace-cards/sgcc-electricity-card-xiaoshi-style.yaml
+examples/lovelace-cards/sgcc-electricity-card.yaml
 examples/lovelace-sgcc-electricity.yaml
 ```
 
@@ -323,6 +326,8 @@ examples/lovelace-sgcc-electricity.yaml
 2. 粘贴示例内容作为一个 view。
 3. 把示例中的 `4840` 替换成你自己的户号末四位。
 4. 日/月历史实体按 HA 实际出现的数据范围增删。
+
+`sgcc-electricity-card-xiaoshi-original.yaml`、`sgcc-electricity-card-xiaoshi-style.yaml` 和 `sgcc-electricity-card.yaml` 都已经替换成本项目实体字段。
 
 曲线部分依赖 HACS 的 `apexcharts-card`；如果未安装，可以删除“历史曲线（可选 ApexCharts）”部分。
 

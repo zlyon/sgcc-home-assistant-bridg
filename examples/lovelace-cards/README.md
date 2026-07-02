@@ -1,7 +1,25 @@
 # Lovelace 卡片示例
 
-这里只有当前项目自用卡片示例。把 YAML 里的 `4840` 替换成自己的户号后四位。
+把 YAML 里的 `4840` 替换成自己的户号后四位。这里不自动安装卡片资源。
 
-- `sgcc-electricity-card.yaml`：自用 Lovelace 卡片，需同时放置 `../custom-cards/sgcc-electricity-card.js`。
+## 内置三套示例
+
+- `sgcc-electricity-card-xiaoshi-original.yaml`：消逝 / xiaoshi 原版风格预设。使用本项目 `custom:sgcc-electricity-card`，直接读取本项目实体，配置了 `variant: xiaoshi-original`。
+- `sgcc-electricity-card-xiaoshi-style.yaml`：消逝风格优化版。使用本项目 `custom:sgcc-electricity-card`，直接读取本项目实体，配置了 `variant: xiaoshi`。
+- `sgcc-electricity-card.yaml`：当前项目自用卡片，使用本项目 `custom:sgcc-electricity-card` 默认样式。
+
+三份 YAML 都是已经替换成本项目实体字段的预设。需要把：
+
+```text
+examples/custom-cards/sgcc-electricity-card.js
+```
+
+放到 HA 的 `/config/www/sgcc/`，并在 Lovelace resources 添加：
+
+```text
+/local/sgcc/sgcc-electricity-card.js
+```
+
+类型选 `module`。
 
 如果你已有 `state_grid` 仪表盘 YAML，不建议后端兼容另一套实体模型；用 `tools/convert_state_grid_lovelace.py` 做字段替换。

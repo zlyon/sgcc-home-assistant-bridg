@@ -220,9 +220,14 @@ function sumTou(rows) {
 
 function renderCard(data, config) {
   if (data.error) return `<ha-card><div class="sgcc-error">${escapeHtml(data.error)}</div></ha-card>`;
+  const variant = config.variant === "xiaoshi-original"
+    ? "variant-xiaoshi-original"
+    : config.variant === "xiaoshi"
+      ? "variant-xiaoshi"
+      : "variant-default";
   return `
     <ha-card class="sgcc-card">
-      <article class="sgcc-widget">
+      <article class="sgcc-widget ${variant}">
         ${renderHeader(data)}
         ${renderSettledBill(data)}
         ${renderBalanceRow(data)}
@@ -466,6 +471,52 @@ function styles() {
         box-shadow: 0 18px 48px rgba(0,0,0,0.38), inset 0 1px 0 rgba(236,239,244,0.11);
         box-sizing: border-box;
       }
+      .sgcc-widget.variant-xiaoshi {
+        --sgcc-snow: #ffffff;
+        --sgcc-muted: rgba(255,255,255,.66);
+        --sgcc-frost: #0fccc3;
+        --sgcc-blue: #07d2ff;
+        --sgcc-green: #35f0a0;
+        --sgcc-gold: #b58cff;
+        --sgcc-orange: #ff5f7e;
+        --sgcc-purple: #804aff;
+        border-radius: 14px;
+        border: 1px solid rgba(15,204,195,.24);
+        background:
+          radial-gradient(circle at 10% 0%, rgba(15,204,195,.22), transparent 34%),
+          radial-gradient(circle at 100% 18%, rgba(128,74,255,.24), transparent 32%),
+          linear-gradient(145deg, rgba(15,22,38,.86), rgba(6,9,20,.92));
+        box-shadow: 0 14px 34px rgba(0,0,0,.36), inset 0 1px 0 rgba(255,255,255,.10);
+      }
+      .sgcc-widget.variant-xiaoshi .sgcc-icon,
+      .sgcc-widget.variant-xiaoshi .fake-icon,
+      .sgcc-widget.variant-xiaoshi .small-icon {
+        background: linear-gradient(135deg, rgba(15,204,195,.20), rgba(128,74,255,.18));
+      }
+      .sgcc-widget.variant-xiaoshi .monthly-svg rect { fill: var(--sgcc-purple); opacity: .86; }
+      .sgcc-widget.variant-xiaoshi .cal-cell.has-data { background: rgba(15,204,195,.12); }
+      .sgcc-widget.variant-xiaoshi-original {
+        --sgcc-snow: #ffffff;
+        --sgcc-muted: rgba(255,255,255,.68);
+        --sgcc-frost: #0fccc3;
+        --sgcc-blue: #07d2ff;
+        --sgcc-green: #0fccc3;
+        --sgcc-gold: #804aff;
+        --sgcc-orange: #f30660;
+        --sgcc-purple: #804aff;
+        width: min(100%, 500px);
+        border-radius: 10px;
+        border: 0;
+        background: linear-gradient(145deg, rgba(32,32,38,.94), rgba(10,12,20,.96));
+        box-shadow: 0 10px 26px rgba(0,0,0,.34);
+      }
+      .sgcc-widget.variant-xiaoshi-original .sgcc-icon,
+      .sgcc-widget.variant-xiaoshi-original .fake-icon,
+      .sgcc-widget.variant-xiaoshi-original .small-icon {
+        background: rgba(255,255,255,.10);
+      }
+      .sgcc-widget.variant-xiaoshi-original .monthly-svg rect { fill: #804aff; opacity: .82; }
+      .sgcc-widget.variant-xiaoshi-original .cal-cell.has-data { background: rgba(15,204,195,.10); }
       .sgcc-head { display: flex; align-items: center; gap: 12px; padding: 0 2px 10px; }
       .sgcc-icon { width: 42px; height: 42px; border-radius: 15px; display: grid; place-items: center; color: var(--sgcc-frost); font-size: 30px; font-weight: 800; background: rgba(136,192,208,0.12); box-shadow: inset 0 1px 0 rgba(236,239,244,.10); }
       .sgcc-title { font-size: 19px; font-weight: 760; letter-spacing: .01em; }
