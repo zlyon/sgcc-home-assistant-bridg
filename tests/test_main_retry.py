@@ -3,12 +3,12 @@ import unittest
 from types import ModuleType, SimpleNamespace
 
 sys.modules.setdefault("schedule", SimpleNamespace())
-_data_fetcher_stub = ModuleType("data_fetcher")
+_data_fetcher_stub = ModuleType("sgcc_ha_bridge.data_fetcher")
 _data_fetcher_stub.DataFetcher = object
-sys.modules.setdefault("data_fetcher", _data_fetcher_stub)
+sys.modules.setdefault("sgcc_ha_bridge.data_fetcher", _data_fetcher_stub)
 
-import main
-from login_guard import NonRetryableFetchError
+from sgcc_ha_bridge import main
+from sgcc_ha_bridge.login_guard import NonRetryableFetchError
 
 
 class FakeFetcher:

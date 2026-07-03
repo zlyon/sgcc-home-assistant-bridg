@@ -2,14 +2,13 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from cache_validity import (
+from sgcc_ha_bridge.cache_validity import (
     account_data_has_recent_cache_value,
     has_useful_account_data,
     has_useful_legacy_cache_entry,
 )
-from model import Account, AccountData, Balance, DailyReading, MonthlyReading
+from sgcc_ha_bridge.model import Account, AccountData, Balance, DailyReading, MonthlyReading
 
 
 class CacheValidityTestCase(unittest.TestCase):

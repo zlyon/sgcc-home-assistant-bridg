@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from llm_config import DEFAULT_BASE_URL, DEFAULT_MODEL, load_llm_config
+from sgcc_ha_bridge.llm_config import DEFAULT_BASE_URL, DEFAULT_MODEL, load_llm_config
 
 
 class LlmConfigTestCase(unittest.TestCase):

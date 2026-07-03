@@ -1,18 +1,23 @@
 import importlib
 import os
+import socket
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 class BrowserServiceConfigTestCase(unittest.TestCase):
     def _load_browser_service(self, **env):
         old_env = os.environ.copy()
         os.environ.update(env)
-        sys.modules.pop("browser_service", None)
+        sys.modules.pop("sgcc_ha_bridge.browser_service", None)
         try:
-            return importlib.import_module("browser_service")
+            return importlib.import_module("sgcc_ha_bridge.browser_service")
         finally:
             os.environ.clear()
             os.environ.update(old_env)
@@ -74,10 +79,12 @@ class BrowserServiceConfigTestCase(unittest.TestCase):
             browser_service._start_cdp_forwarder()
 
     def test_cdp_forward_starts_threaded_proxy_when_enabled(self):
+        public_port = _free_port()
+        internal_port = _free_port()
         browser_service = self._load_browser_service(
             SGCC_BROWSER_CDP_HOST="127.0.0.1",
-            SGCC_BROWSER_CDP_PORT="29222",
-            SGCC_BROWSER_CDP_INTERNAL_PORT="29223",
+            SGCC_BROWSER_CDP_PORT=str(public_port),
+            SGCC_BROWSER_CDP_INTERNAL_PORT=str(internal_port),
             SGCC_BROWSER_CDP_FORWARD_ENABLED="true",
         )
 
@@ -85,7 +92,7 @@ class BrowserServiceConfigTestCase(unittest.TestCase):
             browser_service._start_cdp_forwarder()
             self.assertTrue(browser_service._cdp_forward_running())
             server, thread = browser_service._cdp_forward_proc
-            self.assertEqual(server.server_address[1], 29222)
+            self.assertEqual(server.server_address[1], public_port)
             self.assertTrue(thread.is_alive())
         finally:
             browser_service._stop_cdp_forwarder()

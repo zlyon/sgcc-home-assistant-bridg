@@ -72,10 +72,9 @@ def _install_selenium_stub_if_missing():
 
 
 _install_selenium_stub_if_missing()
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from model import Account, AccountData
-from scraper import Scraper
+from sgcc_ha_bridge.model import Account, AccountData
+from sgcc_ha_bridge.scraper import Scraper
 
 
 class FetchAllAccountEnumerationTestCase(unittest.TestCase):

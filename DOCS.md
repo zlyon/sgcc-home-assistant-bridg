@@ -339,7 +339,23 @@ examples/lovelace-sgcc-electricity.yaml
 - 腾讯点选验证码识别会把验证码截图发送给你配置的 OpenAI 兼容 LLM 服务；请根据所选服务隐私条款自行评估。
 - 请不要提交真实 `.env`、国网密码、Home Assistant Token、MQTT 凭据和 LLM API Key。
 
-## 8. 常见问题与排障
+
+## 8. 开发结构
+
+- `sgcc_ha_bridge/`：核心 Python 包。
+- `scripts/`：Docker/Add-on shell 入口和旧导入路径兼容 wrapper。
+- `tests/`：单元测试。
+- `tools/`：离线辅助脚本。
+- `examples/`：Lovelace / 卡片示例。
+- `assets/readme/`：历史文档图片；`assets/lovelace-cards/`：卡片截图。
+
+本地单测：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+## 9. 常见问题与排障
 
 ### RK001
 
@@ -393,7 +409,7 @@ docker pull crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.com/maribelhe
 docker manifest inspect crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.com/maribelhearm/sgcc_ha:latest
 ```
 
-## 9. 和上游项目的关系
+## 10. 和上游项目的关系
 
 上游项目已经具备账号密码登录、LLM 视觉验证码、二维码兜底、Vue state 辅助取数、余额、日/月/年用电、峰平谷尖、REST 传感器和可选 SQLite/MySQL 等能力。
 
@@ -409,6 +425,6 @@ docker manifest inspect crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.c
 | HA 发布 | REST states API 传感器为主 | MQTT Discovery 自动建实体，同时保留 REST 兼容路径。 |
 | 缓存恢复 | 有旧缓存/数据库能力 | 增加 SQLite/旧 REST 状态重发布、空缓存判定、retained MQTT state。 |
 
-## 10. 关键词
+## 11. 关键词
 
 SGCC、State Grid、国家电网、网上国网、95598、Home Assistant、MQTT Discovery、SQLite、Selenium、Google Chrome、Chromium、CDP、captcha、LLM、electricity、energy。

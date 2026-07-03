@@ -2,10 +2,9 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from ha_mapping import account_data_to_update_args, with_history_daily_if_empty
-from model import Account, AccountData, Balance, DailyReading
+from sgcc_ha_bridge.ha_mapping import account_data_to_update_args, with_history_daily_if_empty
+from sgcc_ha_bridge.model import Account, AccountData, Balance, DailyReading
 
 
 class FakeStore:

@@ -164,7 +164,7 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 *.db
-./script/__pycache__
+scripts/__pycache__/
 scripts/debug_fetch.py
 errors
 sgcc_cache.json
@@ -172,3 +172,6 @@ debug_captcha_out
 debug_captcha_opencv
 homeassistant_sgcc_sensors
 .claude
+# Local workflow/task state
+.workflow/
+data/

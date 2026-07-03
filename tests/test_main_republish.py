@@ -6,14 +6,14 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 sys.modules.setdefault("schedule", SimpleNamespace())
-_data_fetcher_stub = ModuleType("data_fetcher")
+_data_fetcher_stub = ModuleType("sgcc_ha_bridge.data_fetcher")
 _data_fetcher_stub.DataFetcher = object
-sys.modules.setdefault("data_fetcher", _data_fetcher_stub)
+sys.modules.setdefault("sgcc_ha_bridge.data_fetcher", _data_fetcher_stub)
 
-import main
-from config import FetcherConfig
-from model import Account, AccountData, DailyReading, FetchRun, MonthlyReading
-from store import Store
+from sgcc_ha_bridge import main
+from sgcc_ha_bridge.config import FetcherConfig
+from sgcc_ha_bridge.model import Account, AccountData, DailyReading, FetchRun, MonthlyReading
+from sgcc_ha_bridge.store import Store
 
 
 class FakeMqttPublisher:

@@ -1,10 +1,10 @@
 import unittest
 from types import SimpleNamespace
 
-import mqtt_publisher
-from config import FetcherConfig
-from model import Account, AccountData
-from mqtt_publisher import MqttPublisher
+from sgcc_ha_bridge import mqtt_publisher
+from sgcc_ha_bridge.config import FetcherConfig
+from sgcc_ha_bridge.model import Account, AccountData
+from sgcc_ha_bridge.mqtt_publisher import MqttPublisher
 
 
 class FakeClient:

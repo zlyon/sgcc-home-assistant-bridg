@@ -22,6 +22,7 @@ RUN apt-get --allow-releaseinfo-change update \
     && apt-get clean
 
 WORKDIR /app
+COPY sgcc_ha_bridge/ /app/sgcc_ha_bridge/
 COPY scripts/browser_service.py /app/browser_service.py
 COPY scripts/browser-service-entrypoint.sh /app/browser-service-entrypoint.sh
 RUN chmod +x /app/browser-service-entrypoint.sh /app/browser_service.py

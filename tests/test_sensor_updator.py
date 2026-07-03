@@ -4,9 +4,9 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-import sensor_updator
+from sgcc_ha_bridge import sensor_updator
 
-from sensor_updator import SensorUpdator
+from sgcc_ha_bridge.sensor_updator import SensorUpdator
 
 
 class CacheOnlySensorUpdator(SensorUpdator):

@@ -253,6 +253,17 @@ examples/lovelace-cards/
 - [CHANGELOG.md](CHANGELOG.md)：版本记录。
 - [NOTICE](NOTICE)：上游来源与版权说明。
 
+
+## 开发与测试
+
+项目源码在 `sgcc_ha_bridge/`，`scripts/` 只保留 Docker/Add-on 入口脚本和旧导入路径兼容 wrapper，测试统一放在 `tests/`。
+
+本地验证：
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 ## 项目状态
 
 - 已在个人 Home Assistant 场景完成真实账号抓取验证。

@@ -3,7 +3,7 @@ import sqlite3
 import tempfile
 import unittest
 
-from model import (
+from sgcc_ha_bridge.model import (
     Account,
     AccountData,
     Balance,
@@ -14,7 +14,7 @@ from model import (
     SessionCheck,
     YearlyReading,
 )
-from store import Store
+from sgcc_ha_bridge.store import Store
 
 
 class StoreTestCase(unittest.TestCase):

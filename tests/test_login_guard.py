@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from login_guard import (
+from sgcc_ha_bridge.login_guard import (
     classify_login_failure,
     clear_login_cooldown,
     get_login_cooldown,

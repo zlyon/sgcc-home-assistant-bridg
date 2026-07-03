@@ -7,12 +7,16 @@ on:
     tags:
       - 'v*'
     paths:
+      - 'sgcc_ha_bridge/**'
       - 'scripts/**'
       - 'tests/**'
+      - 'tools/**'
       - 'Dockerfile-for-github-action'
       - 'Dockerfile.browser'
+      - '.dockerignore'
       - 'docker-compose.yml'
       - 'requirements.txt'
+      - 'pyproject.toml'
       - 'example.env'
       - 'config.yaml'
       - 'repository.yaml'
@@ -20,12 +24,16 @@ on:
       - '.github/workflows/docker-image.yml'
   pull_request:
     paths:
+      - 'sgcc_ha_bridge/**'
       - 'scripts/**'
       - 'tests/**'
+      - 'tools/**'
       - 'Dockerfile-for-github-action'
       - 'Dockerfile.browser'
+      - '.dockerignore'
       - 'docker-compose.yml'
       - 'requirements.txt'
+      - 'pyproject.toml'
       - 'example.env'
       - 'config.yaml'
       - 'repository.yaml'
@@ -55,8 +63,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          PYTHONPATH=scripts python -m unittest scripts.test_mqtt_publisher -v
-          PYTHONPATH=scripts python -m unittest discover -s tests -v
+          python -m unittest discover -s tests -v
 
   docker:
     runs-on: ubuntu-latest

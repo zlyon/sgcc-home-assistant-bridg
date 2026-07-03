@@ -2,9 +2,8 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
-from parser import merge_account_data, parse_account_data
+from sgcc_ha_bridge.parser import merge_account_data, parse_account_data
 
 
 class ParserTestCase(unittest.TestCase):
