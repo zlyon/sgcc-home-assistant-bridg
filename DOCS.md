@@ -342,18 +342,10 @@ examples/lovelace-sgcc-electricity.yaml
 
 ## 8. 开发结构
 
-- `sgcc_ha_bridge/`：核心 Python 包。
-- `scripts/`：Docker/Add-on shell 入口和旧导入路径兼容 wrapper。
-- `tests/`：单元测试。
-- `tools/`：离线辅助脚本。
-- `examples/`：Lovelace / 卡片示例。
-- `assets/readme/`：历史文档图片；`assets/lovelace-cards/`：卡片截图。
+仓库结构、本地测试、旧 `scripts/` 入口兼容和贡献流程见：
 
-本地单测：
-
-```bash
-python -m unittest discover -s tests -v
-```
+- [docs/development.md](docs/development.md)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 9. 常见问题与排障
 
