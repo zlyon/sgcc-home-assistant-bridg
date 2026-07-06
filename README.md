@@ -99,6 +99,8 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 
 REST 兼容实体仍可用，主要用于迁移旧仪表盘或自动化。详细实体说明见 [DOCS.md#5-home-assistant-实体](DOCS.md#5-home-assistant-实体)。
 
+金额、余额、预付费余额、应交金额或上月余额口径不一致时，按 [DOCS.md#金额余额字段排障](DOCS.md#金额余额字段排障) 开启 `SGCC_MONEY_DIAG=true`，复制结构化诊断日志到 issue。
+
 ## Lovelace 示例
 
 示例和截图在：
