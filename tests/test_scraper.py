@@ -162,7 +162,7 @@ class FetchAllAccountEnumerationTestCase(unittest.TestCase):
             AccountData(account=Account(account_no="1234567891703")),
             AccountData(account=Account(account_no="1234567891703")),
         ])
-        scraper._parse_current_page = lambda: next(snapshots)
+        scraper._parse_current_page = lambda *args, **kwargs: next(snapshots)
 
         data = scraper._fetch_selected_account(1)
 

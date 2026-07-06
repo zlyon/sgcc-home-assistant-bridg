@@ -21,6 +21,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from .const import BALANCE_URL, ELECTRIC_USAGE_URL
 from .model import AccountData, mask_account_no
 from .parser import merge_account_data, parse_account_data
+from .money_diag import log_money_diagnostics, money_diag_enabled
 from . import vue_state
 
 
@@ -91,7 +92,7 @@ class Scraper:
         if selection_index is not None and not self._select_account(selection_index):
             logging.warning(f"Path B 无法选择账户下拉第 {selection_index + 1} 项，已跳过该候选。")
             return None
-        partials.append(self._parse_current_page())
+        partials.append(self._parse_current_page("账户余额"))
         target_account_no = partials[-1].account.account_no
 
         self._navigate(ELECTRIC_USAGE_URL, "电量电费查询")
@@ -104,10 +105,10 @@ class Scraper:
                     f"Path B 电量电费页无法再次选择账户下拉第 {selection_index + 1} 项，继续使用当前账户状态。"
                 )
         self._click_tab("月度电费")
-        partials.append(self._parse_current_page())
+        partials.append(self._parse_current_page("月度电费"))
         self._click_tab("日用电量")
         self._expand_daily_range_to_30_days()
-        partials.append(self._parse_current_page())
+        partials.append(self._parse_current_page("日用电量"))
 
         return merge_account_data(*partials)
 
@@ -141,7 +142,7 @@ class Scraper:
         except Exception:
             return ""
 
-    def _parse_current_page(self) -> AccountData:
+    def _parse_current_page(self, label: str = "当前页") -> AccountData:
         snapshot = self._snapshot()
         data = parse_account_data(store=snapshot.get("store"), components=snapshot.get("components"))
         logging.info(
@@ -151,6 +152,8 @@ class Scraper:
             f"monthly={len(data.monthly)}, daily={len(data.daily)}, "
             f"yearly={'yes' if data.yearly else 'no'}"
         )
+        if money_diag_enabled():
+            log_money_diagnostics(snapshot, data, label)
         return data
 
     def _snapshot(self) -> dict[str, Any]:
