@@ -234,23 +234,15 @@ def _pick_account_no(values: list[Any], account_obj: dict[str, Any]) -> str:
 
 def _pick_balance_obj(values: list[Any]) -> dict[str, Any]:
     amount_keys = _BALANCE_KEYS + _PREPAY_BALANCE_KEYS + _ARREARS_KEYS
-    sentinel_keys = amount_keys + _BALANCE_TIME_KEYS
     selected: dict[str, Any] = {}
-    first_sentinel: dict[str, Any] = {}
     for value in values:
         if not isinstance(value, dict):
             continue
         normalized = _normalize_balance_obj(value)
-        if not first_sentinel and any(k in value for k in sentinel_keys):
-            first_sentinel = normalized
         if _has_any_float(normalized, amount_keys):
             selected = _merge_balance_obj(selected, normalized)
     if selected:
         return selected
-    # Keep the old sentinel behavior for diagnostics/readiness: some SGCC
-    # routes expose balance metadata first and fill the real amount later.
-    if first_sentinel:
-        return first_sentinel
     return {}
 
 

@@ -87,6 +87,18 @@ class ParserTestCase(unittest.TestCase):
         self.assertEqual(data.balance.observed_at, "2026-07-06 05:16:28")
         self.assertEqual(data.balance.balance_cny, 155.31)
 
+    def test_empty_balance_container_does_not_mark_page_ready(self):
+        data = parse_account_data(
+            store={
+                "state": {
+                    "account": {"consNo": "1234567890123", "elecAddr_dst": "addr"},
+                    "balance": {},
+                }
+            }
+        )
+
+        self.assertIsNone(data.balance)
+
     def test_parse_balance_from_label_value_rows(self):
         components = [
             {
