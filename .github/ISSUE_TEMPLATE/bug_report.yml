@@ -6,6 +6,7 @@ body:
     attributes:
       value: |
         感谢反馈。请先确认：日志、截图、配置里不要包含手机号、密码、户号全量、HA Token、LLM API Key、MQTT 密码等敏感信息。
+        金额/余额/预付费/欠费/账单金额问题优先提供结构化诊断日志，不需要贴网页 HTML 或让 AI 分析页面源码。
 
   - type: dropdown
     id: install_method
@@ -96,9 +97,11 @@ body:
     id: data_scope
     attributes:
       label: 数据范围情况
-      description: 如果是数据缺失，请说明余额、日用电、月度、年度、峰平谷尖分别是否有数据；日/月数据最新到哪一天/哪一月。
+      description: 如果是数据缺失，请说明余额、预付费余额、应交金额、日用电、月度、年度、峰平谷尖分别是否有数据；日/月数据最新到哪一天/哪一月。
       placeholder: |
-        余额：有/无
+        余额：有/无，页面显示 xx 元，程序显示 xx/None
+        预付费余额：有/无，HA/MQTT 显示 xx/None
+        应交金额/欠费：有/无，HA/MQTT 显示 xx/None
         日用电：最新到 2026-xx-xx
         月度：最新到 2026-xx
         年度：有/无
@@ -107,10 +110,31 @@ body:
       required: false
 
   - type: textarea
+    id: money_diag
+    attributes:
+      label: 金额/余额诊断日志
+      description: 如果问题涉及余额、预付费、欠费、应交金额、出账金额或上月余额，请开启 SGCC_MONEY_DIAG=true 后贴 Path B 金额诊断摘要和金额候选行。不要贴完整 HTML、完整 Vuex、cookie、token、手机号或完整户号。
+      placeholder: |
+        开启方式：
+        SGCC_MONEY_DIAG=true
+        SGCC_MONEY_DIAG_LIMIT=80
+
+        请贴这些行：
+        Path B 金额诊断摘要: ...
+        Path B 金额候选[1]: category=..., source=..., key=..., value=..., time=..., period=..., account=*********xxxx
+
+        同时给人工对照：
+        网页显示：账户余额=xx 元，截至时间=yyyy-mm-dd hh:mm:ss
+        程序显示：余额=xx/None，预付费余额=xx/None，应交金额=xx/None
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
     id: logs
     attributes:
       label: 相关日志
-      description: 请贴关键日志，不要贴密钥和完整账号。Docker 可用 docker logs <容器名>；Add-on 可在 HA Supervisor 日志页复制。
+      description: 请贴关键日志，不要贴密钥和完整账号。Docker 可用 docker compose logs --since=60m sgcc_electricity_app；Add-on 可在 HA Supervisor 日志页复制。金额类问题请优先填写上面的金额/余额诊断日志。
       render: text
     validations:
       required: false
@@ -119,7 +143,7 @@ body:
     id: config
     attributes:
       label: 脱敏后的关键配置
-      description: 例如 SGCC_BROWSER_MODE、LOGIN_FALLBACK、LLM_BASE_URL、LLM_MODEL、MQTT_HOST、MQTT_DISCOVERY_PREFIX、JOB_START_TIME。不要贴密码/token/key。
+      description: 例如 SGCC_BROWSER_MODE、LOGIN_FALLBACK、LLM_BASE_URL、LLM_MODEL、MQTT_HOST、MQTT_DISCOVERY_PREFIX、JOB_START_TIME、SGCC_MONEY_DIAG。不要贴密码/token/key。
       render: text
     validations:
       required: false
