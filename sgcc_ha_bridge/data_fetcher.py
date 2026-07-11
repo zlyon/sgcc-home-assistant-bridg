@@ -9,7 +9,7 @@ from .browser import build_driver, release_driver
 from .cache_validity import has_useful_account_data
 from .config import FetcherConfig
 from .const import LOGIN_URL
-from .diag import DiagnosticCollector, diag_enabled
+from .diag import DiagnosticCollector, debug_enabled
 from .error_watcher import ErrorWatcher
 from .ha_mapping import account_data_summary, account_data_to_update_args, with_history_daily_if_empty
 from .login import SgccLogin
@@ -24,6 +24,7 @@ from .login_guard import (
 )
 from .mqtt_publisher import MqttPublisher
 from .model import FetchRun, mask_account_no
+from .network_capture import NetworkRecorder
 from .redact import install_account_log_redaction, mask_secret, now_iso, redact_text
 from .scraper import Scraper, redact_account_data
 from .sensor_updator import SensorUpdator
@@ -58,7 +59,7 @@ class DataFetcher:
         """主逻辑：登录链路保持原样，数据抓取切换到 Path B + Store。"""
 
         install_account_log_redaction()
-        diag = DiagnosticCollector(trigger_type=trigger_type) if diag_enabled() else None
+        diag = DiagnosticCollector(trigger_type=trigger_type) if debug_enabled() else None
 
         if not _FETCH_LOCK.acquire(blocking=False):
             skipped_run_id = self._record_skipped_busy_run(trigger_type)
@@ -71,6 +72,7 @@ class DataFetcher:
             return "skipped_busy"
 
         driver = None
+        network_recorder = None
         store = None
         run_id = None
         fetch_status = "failed"
@@ -130,7 +132,8 @@ class DataFetcher:
 
             try:
                 login_client = SgccLogin(driver, self._username, self._password, self.config)
-                if os.getenv("DEBUG_MODE", "false").lower() == "true":
+                login_method = os.getenv("SGCC_LOGIN_METHOD", "password").strip().lower()
+                if login_method in {"phone-code", "phone_code", "sms"}:
                     logged_in = login_client.login(phone_code=True)
                 else:
                     allow_fallback = env_bool("SGCC_QRCODE_FALLBACK_UNATTENDED", False) or trigger_type == "manual"
@@ -168,9 +171,22 @@ class DataFetcher:
             if after_login_check.status != "authenticated":
                 raise Exception(f"session not authenticated after login: {after_login_check.status}")
 
+            network_recorder = NetworkRecorder(driver)
+            network_started = network_recorder.start()
+            if diag is not None:
+                diag.record_timeline(
+                    "network_recorder_started",
+                    success=network_started,
+                    cdp_address=network_recorder.cdp_address,
+                )
+
             self._random_delay(1, 3)
-            logging.info("开始使用 Path B 从 Vue/Vuex 状态抓取账户数据。")
-            scraper = Scraper(driver, diagnostic=diag)
+            logging.info("开始使用动态多源 Path B 抓取账户数据。")
+            scraper = Scraper(
+                driver,
+                diagnostic=diag,
+                network_recorder=network_recorder if network_started else None,
+            )
             account_data_list = scraper.fetch_all()
             if diag is not None:
                 diag.record_fetched_accounts(len(account_data_list))
@@ -347,6 +363,18 @@ class DataFetcher:
                 diag.record_error(e, stage="fetch")
             raise
         finally:
+            if network_recorder is not None:
+                network_recorder.flush()
+                network_recorder.stop()
+                if diag is not None:
+                    diag.record_observations(network_recorder.observations())
+                    for error in network_recorder.errors:
+                        diag.record_error("NetworkRecorder", error, stage="network")
+                    diag.record_timeline(
+                        "network_recorder_stopped",
+                        observation_count=len(network_recorder.observations()),
+                        error_count=len(network_recorder.errors),
+                    )
             if driver is not None:
                 release_driver(driver)
             if "mqtt_pub" in locals() and mqtt_pub is not None:

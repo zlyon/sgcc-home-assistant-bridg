@@ -99,25 +99,26 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 
 REST 兼容实体仍可用，主要用于迁移旧仪表盘或自动化。详细实体说明见 [DOCS.md#5-home-assistant-实体](DOCS.md#5-home-assistant-实体)。
 
-数据缺失、登录异常、发布异常或金额口径不一致时，按 [DOCS.md#诊断模式与-issue-反馈](DOCS.md#诊断模式与-issue-反馈) 开启 `SGCC_DIAG=true`，运行一次后把诊断摘要贴到 issue。
+数据缺失、登录异常、发布异常或金额口径不一致时，按 [DOCS.md#debug-模式与-issue-反馈](DOCS.md#debug-模式与-issue-反馈) 开启 `SGCC_DEBUG=true`，运行一次后附上脱敏 Debug bundle。
 
-## 诊断模式
+## Debug 模式
 
-提交 issue 前可以临时开启单开关诊断：
+提交 issue 前可以临时开启：
 
 ```env
-SGCC_DIAG=true
+SGCC_DEBUG=true
 ```
 
-开启后重新运行一次抓取，日志会输出 `SGCC DIAG SUMMARY` 可复制摘要，并在容器数据目录写入脱敏诊断包：
+开启后重新运行一次抓取，程序沿用同一条生产抓取链路，并额外保存 Network、Vuex、Vue Component、DOM 语义、结构指纹、候选字段和 parser decision：
 
 ```text
-/data/diag/latest/summary.txt
-/data/diag/latest/summary.json
-/data/diag/latest/fields.redacted.json
+/data/debug/latest/summary.txt
+/data/debug/latest/observations.redacted.json
+/data/debug/latest/parser-decisions.json
+/data/debug/latest/sgcc-debug-bundle.zip
 ```
 
-诊断包覆盖运行环境、登录会话、账户解析、金额候选、日/月/年用电范围、HA/MQTT 发布和错误信息。字段兼容改动以 `SGCC_DIAG` 返回的真实脱敏字段为依据。
+Debug 数据递归脱敏，并对响应体、组件、节点、深度和执行时间设置硬上限。未知字段不会直接作为金额发布；预算内的字段和值、截断位置和结构差异会进入 bundle，后续可直接转成 fixture/adapter。旧 `SGCC_DIAG=true` 保持兼容。
 
 ## Lovelace 示例
 

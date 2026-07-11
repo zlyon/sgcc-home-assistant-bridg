@@ -5,7 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sgcc_ha_bridge.diag import DiagnosticCollector, SUMMARY_END, SUMMARY_START, diag_enabled
+from sgcc_ha_bridge.diag import (
+    DiagnosticCollector,
+    SUMMARY_END,
+    SUMMARY_START,
+    debug_enabled,
+    diag_enabled,
+    diag_output_root,
+    redact_structure,
+)
 from sgcc_ha_bridge.model import (
     Account,
     AccountData,
@@ -15,14 +23,49 @@ from sgcc_ha_bridge.model import (
     SessionCheck,
     YearlyReading,
 )
+from sgcc_ha_bridge.observation import CaptureScope, Observation, ParserDecision
 
 
 class DiagSwitchTestCase(unittest.TestCase):
-    def test_sgcc_diag_is_the_only_debug_switch(self):
-        with patch.dict(os.environ, {"SGCC_DIAG": "true"}, clear=False):
+    def test_sgcc_debug_is_canonical_and_old_switches_are_aliases(self):
+        with patch.dict(
+            os.environ,
+            {"SGCC_DEBUG": "true", "SGCC_DIAG": "false", "DEBUG_MODE": "false"},
+            clear=False,
+        ):
+            self.assertTrue(debug_enabled())
+        with patch.dict(
+            os.environ,
+            {"SGCC_DEBUG": "false", "SGCC_DIAG": "true", "DEBUG_MODE": "false"},
+            clear=False,
+        ):
             self.assertTrue(diag_enabled())
-        with patch.dict(os.environ, {"SGCC_DIAG": "false"}, clear=False):
+        with patch.dict(
+            os.environ,
+            {"SGCC_DEBUG": "false", "SGCC_DIAG": "false", "DEBUG_MODE": "true"},
+            clear=False,
+        ):
+            self.assertTrue(debug_enabled())
+        with patch.dict(
+            os.environ,
+            {"SGCC_DEBUG": "false", "SGCC_DIAG": "false", "DEBUG_MODE": "false"},
+            clear=False,
+        ):
             self.assertFalse(diag_enabled())
+
+    def test_legacy_diag_switch_keeps_legacy_output_directory(self):
+        with patch.dict(
+            os.environ,
+            {
+                "SGCC_DEBUG": "false",
+                "DEBUG_MODE": "false",
+                "SGCC_DIAG": "true",
+                "SGCC_DEBUG_DIR": "/data/debug",
+                "SGCC_DIAG_DIR": "/data/diag-custom",
+            },
+            clear=False,
+        ):
+            self.assertEqual(diag_output_root(), Path("/data/diag-custom"))
 
 
 class DiagnosticCollectorTestCase(unittest.TestCase):
@@ -144,6 +187,83 @@ class DiagnosticCollectorTestCase(unittest.TestCase):
         self.assertNotIn("password", combined.lower())
         self.assertNotIn("token", combined.lower())
         self.assertNotIn("api_key", combined.lower())
+
+    def test_debug_bundle_keeps_unknown_shape_but_redacts_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            collector = DiagnosticCollector(trigger_type="manual", output_dir=temp_dir)
+            collector.set_run_id(43)
+            scope = CaptureScope.create("账户余额", "1234567890123")
+            collector.record_observations([
+                Observation(
+                    source="network",
+                    scope_id=scope.id,
+                    scope_label=scope.label,
+                    account_no=scope.account_no,
+                    payload={
+                        "data": {
+                            "accountNo": "1234567890123",
+                            "realAccountValue": "36.27",
+                            "phone": "13800138000",
+                            "token": "secret-token",
+                        }
+                    },
+                    metadata={"url": "https://95598.cn/api/balance?token=secret"},
+                )
+            ])
+            collector.record_decisions([
+                ParserDecision(
+                    source="network",
+                    scope_id=scope.id,
+                    scope_label=scope.label,
+                    account_no=scope.account_no,
+                    status="rejected",
+                    reason="unknown structured payload",
+                )
+            ])
+            collector.emit("success")
+
+            latest = Path(temp_dir) / "latest"
+            observations = (latest / "observations.redacted.json").read_text()
+            candidates = (latest / "candidates.redacted.json").read_text()
+            decisions = (latest / "parser-decisions.json").read_text()
+            self.assertIn("realAccountValue", observations)
+            self.assertIn("realAccountValue", candidates)
+            self.assertNotIn("1234567890123", observations)
+            self.assertNotIn("13800138000", observations)
+            self.assertNotIn("secret-token", observations)
+            self.assertIn("unknown structured payload", decisions)
+            self.assertTrue((latest / "sgcc-debug-bundle.zip").is_file())
+
+    def test_record_observations_deduplicates_same_capture(self):
+        collector = DiagnosticCollector(trigger_type="manual")
+        observation = Observation(
+            source="network",
+            scope_id="scope-1",
+            scope_label="账户余额",
+            payload={"data": {"sumMoney": "12.34"}},
+        )
+
+        collector.record_observations([observation])
+        collector.record_observations([observation])
+
+        self.assertEqual(len(collector.observations), 1)
+        self.assertEqual(len(collector.shapes), 1)
+
+    def test_redaction_masks_unknown_numeric_identity_and_common_pii(self):
+        payload = redact_structure({
+            "unknownNumber": 1234567890123,
+            "mysteryText": "110101199001011234",
+            "contactValue": "person@example.com",
+            "message": "failed at https://95598.cn/api/query?token=secret-token&accountNo=1234567890123",
+        })
+
+        text = json.dumps(payload, ensure_ascii=False)
+        self.assertNotIn("1234567890123", text)
+        self.assertNotIn("110101199001011234", text)
+        self.assertNotIn("person@example.com", text)
+        self.assertNotIn("secret-token", text)
+        self.assertIn("<redacted-id>", text)
+        self.assertIn("<redacted-email>", text)
 
 
 if __name__ == "__main__":

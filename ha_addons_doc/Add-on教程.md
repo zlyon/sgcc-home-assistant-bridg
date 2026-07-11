@@ -69,7 +69,8 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `MQTT_USERNAME` | MQTT 用户名，可留空。 |
 | `MQTT_PASSWORD` | MQTT 密码，可留空。 |
 | `MQTT_DISCOVERY_PREFIX` | 通常保持 `homeassistant`。 |
-| `SGCC_DIAG` | 提交 issue 前可临时设为 `true`；日志输出 `SGCC DIAG SUMMARY`，并写入 `/data/diag/latest` 脱敏诊断包。 |
+| `SGCC_DEBUG` | 提交 issue 前可临时设为 `true`；写入 `/data/debug/latest/sgcc-debug-bundle.zip` 完整脱敏取证包。 |
+| `SGCC_DIAG` | 旧诊断开关兼容别名，等价于 `SGCC_DEBUG`。 |
 | `SGCC_BROWSER_MODE` | 默认 `browser-service`；如需回滚旧 Chromium 模式，可改为 `local`。 |
 | `SGCC_BROWSER_SERVICE_STOP_ON_RELEASE` | 默认 `true`；每轮抓取结束后关闭 Chrome 本体，降低常驻资源占用。 |
 
@@ -153,7 +154,7 @@ MQTT Discovery 正常后，Home Assistant 会出现类似下面的设备：
 ### 抓取失败
 
 - 查看 Add-on 日志。
-- 需要反馈 issue 时，把 `SGCC_DIAG` 临时设为 `true` 后重新运行一次，复制 `SGCC DIAG SUMMARY`，并保留 `/data/diag/latest` 里的脱敏诊断包。
+- 需要反馈 issue 时，把 `SGCC_DEBUG` 临时设为 `true` 后重新运行一次，附上 `/data/debug/latest/sgcc-debug-bundle.zip`。
 - 查看 `/data/errors` 中的错误截图、HTML 和 metadata。
 - 如果出现 `RK001`，通常是 95598 / 腾讯验证码风控命中，本项目会停止本轮，避免反复打账号。
 - Add-on 和 Docker Compose 默认都使用 `SGCC_BROWSER_MODE=browser-service`。Add-on 内嵌官方 Google Chrome browser manager；Docker Compose 使用官方 Google Chrome sidecar。

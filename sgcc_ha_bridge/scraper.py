@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from typing import Any, Optional
 
@@ -21,7 +22,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 from .const import BALANCE_URL, ELECTRIC_USAGE_URL
 from .model import AccountData, mask_account_no
 from .parser import merge_account_data, parse_account_data
-from .diag import diag_enabled
+from .cache_validity import has_useful_account_data
+from .diag import debug_enabled
+from .extractor import extract_account_data
+from .observation import CaptureScope, Observation
 from . import vue_state
 
 
@@ -42,13 +46,16 @@ class Scraper:
         wait_seconds: int = 12,
         settle_seconds: Optional[float] = None,
         diagnostic: Any = None,
+        network_recorder: Any = None,
     ):
         self.driver = driver
         self.wait_seconds = wait_seconds
         self.settle_seconds = self._settle_seconds_from_env() if settle_seconds is None else settle_seconds
         self.diagnostic = diagnostic
+        self.network_recorder = network_recorder
         self.account_set_authoritative = False
         self._selector_enumeration_failed = False
+        self._active_scope: Optional[CaptureScope] = None
 
     @staticmethod
     def _settle_seconds_from_env() -> float:
@@ -128,14 +135,21 @@ class Scraper:
     def _fetch_account(self, selection: Optional[AccountOption]) -> Optional[AccountData]:
         partials: list[AccountData] = []
 
-        self._navigate(BALANCE_URL, "账户余额")
-        if selection is not None and not self._select_account(
-            account_no=selection.account_no,
-            fallback_index=selection.index,
-        ):
-            logging.warning(f"Path B 无法选择账户下拉第 {selection.index + 1} 项，已跳过该候选。")
-            return None
-        partials.append(self._parse_current_page("账户余额"))
+        balance_scope = self._begin_scope(
+            "账户余额",
+            selection.account_no if selection is not None else "",
+        )
+        try:
+            self._navigate(BALANCE_URL, "账户余额")
+            if selection is not None and not self._select_account(
+                account_no=selection.account_no,
+                fallback_index=selection.index,
+            ):
+                logging.warning(f"Path B 无法选择账户下拉第 {selection.index + 1} 项，已跳过该候选。")
+                return None
+            partials.append(self._parse_current_page("账户余额", balance_scope))
+        finally:
+            self._end_scope(balance_scope)
         target_account_no = partials[-1].account.account_no
         if selection is not None and selection.account_no and target_account_no != selection.account_no:
             logging.warning(
@@ -148,24 +162,32 @@ class Scraper:
             logging.warning("Path B 账户余额页选择后未解析到户号，已跳过该候选。")
             return None
 
-        self._navigate(ELECTRIC_USAGE_URL, "电量电费查询")
-        if target_account_no:
-            current_account_no = self._current_account_no()
-            if target_account_no and current_account_no == target_account_no:
-                logging.info(f"Path B 电量电费页已保持账户: {mask_account_no(target_account_no)}")
-            elif not self._select_account(account_no=target_account_no):
-                logging.warning(
-                    f"Path B 电量电费页无法按户号重新选择 {mask_account_no(target_account_no)}，已跳过该候选。"
-                )
-                return None
-        self._click_tab("月度电费")
-        monthly = self._parse_current_page("月度电费")
+        monthly_scope = self._begin_scope("月度电费", target_account_no)
+        try:
+            self._navigate(ELECTRIC_USAGE_URL, "电量电费查询")
+            if target_account_no:
+                current_account_no = self._current_account_no()
+                if target_account_no and current_account_no == target_account_no:
+                    logging.info(f"Path B 电量电费页已保持账户: {mask_account_no(target_account_no)}")
+                elif not self._select_account(account_no=target_account_no):
+                    logging.warning(
+                        f"Path B 电量电费页无法按户号重新选择 {mask_account_no(target_account_no)}，已跳过该候选。"
+                    )
+                    return None
+            self._click_tab("月度电费")
+            monthly = self._parse_current_page("月度电费", monthly_scope)
+        finally:
+            self._end_scope(monthly_scope)
         if not self._page_matches_target_account(monthly, target_account_no, "月度电费"):
             return None
         partials.append(monthly)
-        self._click_tab("日用电量")
-        self._expand_daily_range_to_30_days()
-        daily = self._parse_current_page("日用电量")
+        daily_scope = self._begin_scope("日用电量", target_account_no)
+        try:
+            self._click_tab("日用电量")
+            self._expand_daily_range_to_30_days()
+            daily = self._parse_current_page("日用电量", daily_scope)
+        finally:
+            self._end_scope(daily_scope)
         if not self._page_matches_target_account(daily, target_account_no, "日用电量"):
             return None
         partials.append(daily)
@@ -218,9 +240,34 @@ class Scraper:
         except Exception:
             return ""
 
-    def _parse_current_page(self, label: str = "当前页") -> AccountData:
-        snapshot = self._snapshot()
-        data = parse_account_data(store=snapshot.get("store"), components=snapshot.get("components"))
+    def _parse_current_page(
+        self,
+        label: str = "当前页",
+        scope: Optional[CaptureScope] = None,
+    ) -> AccountData:
+        scope = scope or self._active_scope or CaptureScope.create(
+            label,
+            url=self._safe_current_url(),
+        )
+        snapshot = self._snapshot(wide_debug=debug_enabled())
+        observations = self._observations_for_scope(scope, snapshot)
+        extraction = extract_account_data(scope, observations)
+        data = extraction.data
+        if not has_useful_account_data(data) and not any(
+            observation.source == "dom" for observation in observations
+        ):
+            dom = self._dom_snapshot()
+            if dom:
+                observations.append(Observation(
+                    source="dom",
+                    scope_id=scope.id,
+                    scope_label=scope.label,
+                    account_no=scope.account_no,
+                    payload=dom,
+                    metadata={"url": self._safe_current_url()},
+                ))
+                extraction = extract_account_data(scope, observations)
+                data = extraction.data
         logging.info(
             "Path B 当前页解析摘要: "
             f"account={'yes' if data.account.account_no else 'no'}, "
@@ -231,27 +278,136 @@ class Scraper:
         if self.diagnostic is not None:
             try:
                 self.diagnostic.record_page(label, snapshot, data)
+                self.diagnostic.record_observations(observations)
+                self.diagnostic.record_decisions(extraction.decisions)
             except Exception as diag_error:
                 logging.warning(f"SGCC DIAG 记录页面诊断失败，已忽略: {diag_error}")
         return data
 
-    def _snapshot(self) -> dict[str, Any]:
+    def _snapshot(self, *, wide_debug: bool = False) -> dict[str, Any]:
+        """Capture a Vue snapshot.
+
+        Readiness/account probes stay on the bounded field-aware component
+        snapshot even when Debug is enabled.  The complete bounded ``$data``
+        capture is intentionally reserved for the final parse point so a
+        polling loop cannot repeatedly serialize the whole component tree.
+        """
         store = {}
         try:
             if hasattr(vue_state, "selected_store_snapshot"):
                 store = vue_state.selected_store_snapshot(self.driver) or {}
             else:
                 store = {"state": vue_state.selected_store_state(self.driver)}
-        except Exception:
+        except Exception as exc:
             store = {}
+            logging.warning(f"Path B Vuex 快照失败，已降级: {type(exc).__name__}")
+            if self.diagnostic is not None:
+                self.diagnostic.record_error(exc, stage="snapshot:vuex")
         try:
-            components = vue_state.selected_vue_data(
-                self.driver,
-                include_diag_fields=diag_enabled(),
-            ) or []
-        except Exception:
+            if wide_debug and debug_enabled():
+                components = vue_state.selected_vue_debug_data(self.driver) or []
+            else:
+                components = vue_state.selected_vue_data(
+                    self.driver,
+                    include_diag_fields=debug_enabled(),
+                ) or []
+        except Exception as exc:
             components = []
-        return {"store": store, "components": components, "url": self.driver.current_url}
+            logging.warning(f"Path B Vue Component 快照失败，已降级: {type(exc).__name__}")
+            if self.diagnostic is not None:
+                self.diagnostic.record_error(exc, stage="snapshot:component")
+        return {"store": store, "components": components, "url": self._safe_current_url()}
+
+    def _observations_for_scope(
+        self,
+        scope: CaptureScope,
+        snapshot: dict[str, Any],
+    ) -> list[Observation]:
+        observations: list[Observation] = []
+        if self.network_recorder is not None:
+            try:
+                observations.extend(self.network_recorder.observations(scope.id))
+            except Exception:
+                pass
+        observations.append(Observation(
+            source="vuex",
+            scope_id=scope.id,
+            scope_label=scope.label,
+            account_no=scope.account_no,
+            payload=snapshot.get("store") or {},
+            metadata={"url": snapshot.get("url") or ""},
+        ))
+        observations.append(Observation(
+            source="component",
+            scope_id=scope.id,
+            scope_label=scope.label,
+            account_no=scope.account_no,
+            payload=snapshot.get("components") or [],
+            metadata={"url": snapshot.get("url") or ""},
+        ))
+        if debug_enabled():
+            dom = self._dom_snapshot()
+            if dom:
+                observations.append(Observation(
+                    source="dom",
+                    scope_id=scope.id,
+                    scope_label=scope.label,
+                    account_no=scope.account_no,
+                    payload=dom,
+                    metadata={"url": snapshot.get("url") or ""},
+                ))
+        return observations
+
+    def _dom_snapshot(self) -> list[dict[str, Any]]:
+        try:
+            return vue_state.dom_semantic_snapshot(self.driver) or []
+        except Exception:
+            return []
+
+    def _begin_scope(self, label: str, account_no: str = "") -> CaptureScope:
+        scope = CaptureScope.create(
+            label,
+            account_no=account_no,
+            url=self._safe_current_url(),
+        )
+        self._active_scope = scope
+        if self.network_recorder is not None:
+            try:
+                self.network_recorder.set_scope(scope)
+            except Exception:
+                pass
+        if self.diagnostic is not None:
+            self.diagnostic.record_timeline(
+                "scope_started",
+                scope_id=scope.id,
+                label=label,
+                account_no=account_no,
+                url=scope.url,
+            )
+        return scope
+
+    def _end_scope(self, scope: CaptureScope) -> None:
+        if self.diagnostic is not None:
+            self.diagnostic.record_timeline(
+                "scope_finished",
+                scope_id=scope.id,
+                label=scope.label,
+                account_no=scope.account_no,
+                url=self._safe_current_url(),
+            )
+        if self.network_recorder is not None:
+            try:
+                self.network_recorder.set_scope(None)
+            except Exception:
+                pass
+        if self._active_scope == scope:
+            self._active_scope = None
+
+    def _safe_current_url(self) -> str:
+        try:
+            return str(self.driver.current_url or "")
+        except Exception:
+            return ""
 
     def _navigate(self, url: str, label: str) -> None:
         target_path = url.split("/osgweb", 1)[-1]
@@ -278,15 +434,16 @@ class Scraper:
             f"//div[contains(@class,'el-tabs__item') and contains(normalize-space(.), '{tab_text}')]",
             f"//*[contains(normalize-space(.), '{tab_text}')]",
         ]
-        for xpath in xpaths:
-            try:
-                element = WebDriverWait(self.driver, 4).until(EC.element_to_be_clickable((By.XPATH, xpath)))
-                previous_signature = self._business_signature(tab_text)
-                self.driver.execute_script("arguments[0].click();", element)
-                self._wait_for_business_ready(tab_text, previous_signature)
-                return True
-            except Exception:
-                continue
+        with self._optional_probe():
+            for xpath in xpaths:
+                try:
+                    element = WebDriverWait(self.driver, 4).until(EC.element_to_be_clickable((By.XPATH, xpath)))
+                    previous_signature = self._business_signature(tab_text)
+                    self.driver.execute_script("arguments[0].click();", element)
+                    self._wait_for_business_ready(tab_text, previous_signature)
+                    return True
+                except Exception:
+                    continue
         return False
 
     def _expand_daily_range_to_30_days(self, min_expected_count: int = 20) -> bool:
@@ -325,19 +482,20 @@ class Scraper:
             f"//span[contains(normalize-space(.), '{range_text}')]/ancestor::*[self::label or self::button or self::div[contains(@class,'el-radio')]][1]",
             f"//*[contains(normalize-space(.), '{range_text}') and string-length(normalize-space(.)) <= 20]",
         ]
-        for xpath in xpaths:
-            try:
-                elements = self.driver.find_elements(By.XPATH, xpath)
-            except Exception:
-                continue
-            for element in elements:
+        with self._optional_probe():
+            for xpath in xpaths:
                 try:
-                    if not self._is_enabled_visible(element):
-                        continue
-                    self.driver.execute_script("arguments[0].click();", element)
-                    return True
+                    elements = self.driver.find_elements(By.XPATH, xpath)
                 except Exception:
                     continue
+                for element in elements:
+                    try:
+                        if not self._is_enabled_visible(element):
+                            continue
+                        self.driver.execute_script("arguments[0].click();", element)
+                        return True
+                    except Exception:
+                        continue
         return False
 
     def _wait_for_daily_range_expansion(
@@ -482,7 +640,8 @@ class Scraper:
         return True
 
     def _has_visible_text(self, text: str) -> bool:
-        elements = self.driver.find_elements(By.XPATH, f"//*[contains(normalize-space(.), '{text}')]")
+        with self._optional_probe():
+            elements = self.driver.find_elements(By.XPATH, f"//*[contains(normalize-space(.), '{text}')]")
         return any(self._is_displayed(element) for element in elements)
 
     def _is_displayed(self, element) -> bool:
@@ -493,15 +652,16 @@ class Scraper:
 
     def _visible_account_options(self) -> list[AccountOption]:
         """Return visible selector options with stable Vue-backed identities."""
-        if not self._open_account_selector():
-            self._selector_enumeration_failed = True
-            return []
-        time.sleep(1)
-        options = self.driver.find_elements(
-            By.XPATH,
-            "//ul[contains(@class,'el-dropdown-menu')]//li"
-            " | //div[contains(@class,'el-select-dropdown')]//li",
-        )
+        with self._optional_probe():
+            if not self._open_account_selector():
+                self._selector_enumeration_failed = True
+                return []
+            time.sleep(1)
+            options = self.driver.find_elements(
+                By.XPATH,
+                "//ul[contains(@class,'el-dropdown-menu')]//li"
+                " | //div[contains(@class,'el-select-dropdown')]//li",
+            )
         result: list[AccountOption] = []
         for option in options:
             try:
@@ -517,18 +677,19 @@ class Scraper:
         return result
 
     def _select_account(self, account_no: str = "", fallback_index: Optional[int] = None) -> bool:
-        if not self._open_account_selector():
-            return False
-        time.sleep(1)
-        options = [
-            option
-            for option in self.driver.find_elements(
-                By.XPATH,
-                "//ul[contains(@class,'el-dropdown-menu')]//li"
-                " | //div[contains(@class,'el-select-dropdown')]//li",
-            )
-            if self._is_enabled_visible(option)
-        ]
+        with self._optional_probe():
+            if not self._open_account_selector():
+                return False
+            time.sleep(1)
+            options = [
+                option
+                for option in self.driver.find_elements(
+                    By.XPATH,
+                    "//ul[contains(@class,'el-dropdown-menu')]//li"
+                    " | //div[contains(@class,'el-select-dropdown')]//li",
+                )
+                if self._is_enabled_visible(option)
+            ]
         selected = None
         if account_no:
             selected = next(
@@ -612,9 +773,29 @@ class Scraper:
 
     def _close_popups(self) -> None:
         try:
-            self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+            with self._optional_probe():
+                self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         except Exception:
             pass
+
+    @contextmanager
+    def _optional_probe(self):
+        """Avoid multiplying the global implicit wait for optional selectors."""
+        original = None
+        try:
+            timeouts = getattr(self.driver, "timeouts", None)
+            original = getattr(timeouts, "implicit_wait", None)
+            self.driver.implicitly_wait(0)
+        except Exception:
+            original = None
+        try:
+            yield
+        finally:
+            if original is not None:
+                try:
+                    self.driver.implicitly_wait(original)
+                except Exception:
+                    pass
 
 
 def redact_account_data(data: AccountData) -> dict[str, Any]:

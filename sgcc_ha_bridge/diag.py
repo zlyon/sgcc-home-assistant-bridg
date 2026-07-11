@@ -14,6 +14,7 @@ import platform
 import re
 import shutil
 import sys
+import zipfile
 from dataclasses import asdict, is_dataclass
 from importlib import metadata
 from pathlib import Path
@@ -22,12 +23,19 @@ from typing import Any, Optional
 from .ha_mapping import account_data_summary
 from .model import AccountData, mask_account_no
 from .redact import now_iso, redact_text, redact_url
+from .observation import (
+    Observation,
+    ParserDecision,
+    collect_generic_candidates,
+    shape_fingerprint,
+)
 
 
 SUMMARY_START = "========== SGCC DIAG SUMMARY START =========="
 SUMMARY_END = "========== SGCC DIAG SUMMARY END =========="
 
-DEFAULT_DIAG_DIR = "/data/diag"
+DEFAULT_DIAG_DIR = "/data/debug"
+LEGACY_DIAG_DIR = "/data/diag"
 MAX_FIELD_VALUES_PER_PAGE = 600
 MAX_SHAPES_PER_PAGE = 260
 MAX_LIST_ITEMS_PER_ARRAY = 20
@@ -36,11 +44,14 @@ MAX_FIELD_DEPTH = 10
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _SECRET_KEY_RE = re.compile(
-    r"(password|passwd|pwd|token|secret|cookie|authorization|credential|api[_-]?key|access[_-]?key|session[_-]?id)$",
+    r"(password|passwd|pwd|token|secret|cookie|authorization|credential|api[_-]?key|access[_-]?key|"
+    r"session[_-]?id|verification[_-]?code|captcha(?:[_-]?(?:ticket|token))?|sms[_-]?code)$",
     re.IGNORECASE,
 )
 _PII_KEY_RE = re.compile(
-    r"(phone|mobile|tel|address|addr|elecaddr|custname|consname|display[_-]?name|realname|姓名|地址|手机号|电话)",
+    r"(phone|mobile|tel|address|addr|elecaddr|custname|consname|display[_-]?name|realname|"
+    r"id[_-]?card|identity|cert(?:ificate)?[_-]?(?:no|num|number)|email|"
+    r"姓名|地址|手机号|电话|身份证|证件|邮箱)",
     re.IGNORECASE,
 )
 _ACCOUNT_KEY_RE = re.compile(
@@ -49,7 +60,9 @@ _ACCOUNT_KEY_RE = re.compile(
 )
 _PHONE_RE = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
 _ACCOUNT_RE = re.compile(r"(?<!\d)(\d{13})(?!\d)")
-_URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+_ID_CARD_RE = re.compile(r"(?<![0-9A-Za-z])(?:\d{15}|\d{17}[0-9Xx])(?![0-9A-Za-z])")
+_EMAIL_RE = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9.-])")
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
 def env_truthy(name: str, default: bool = False) -> bool:
@@ -59,12 +72,21 @@ def env_truthy(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in _TRUTHY
 
 
+def debug_enabled() -> bool:
+    """Canonical debug switch with SGCC_DIAG kept as a compatibility alias."""
+    return env_truthy("SGCC_DEBUG") or env_truthy("SGCC_DIAG") or env_truthy("DEBUG_MODE")
+
+
 def diag_enabled() -> bool:
-    return env_truthy("SGCC_DIAG")
+    return debug_enabled()
 
 
 def diag_output_root() -> Path:
-    return Path(os.getenv("SGCC_DIAG_DIR", DEFAULT_DIAG_DIR))
+    if env_truthy("SGCC_DEBUG") or env_truthy("DEBUG_MODE"):
+        return Path(os.getenv("SGCC_DEBUG_DIR") or DEFAULT_DIAG_DIR)
+    if env_truthy("SGCC_DIAG"):
+        return Path(os.getenv("SGCC_DIAG_DIR") or LEGACY_DIAG_DIR)
+    return Path(os.getenv("SGCC_DEBUG_DIR") or os.getenv("SGCC_DIAG_DIR") or DEFAULT_DIAG_DIR)
 
 
 class DiagnosticCollector:
@@ -90,8 +112,14 @@ class DiagnosticCollector:
         self.accounts: list[dict[str, Any]] = []
         self.publish: list[dict[str, Any]] = []
         self.errors: list[dict[str, Any]] = []
+        self.timeline: list[dict[str, Any]] = []
+        self.observations: list[dict[str, Any]] = []
+        self.candidates: list[dict[str, Any]] = []
+        self.decisions: list[dict[str, Any]] = []
+        self.shapes: list[dict[str, Any]] = []
         self.output_paths: dict[str, str] = {}
         self._emitted = False
+        self._observation_keys: set[tuple[str, str, str, str]] = set()
 
     def set_run_id(self, run_id: Optional[int]) -> None:
         self.run_id = run_id
@@ -132,6 +160,55 @@ class DiagnosticCollector:
 
     def record_selector_options(self, count: int) -> None:
         self.scrape["selector_option_count"] = count
+
+    def record_timeline(self, event: str, **details: Any) -> None:
+        self.timeline.append(redact_structure({
+            "at": now_iso(),
+            "event": event,
+            **details,
+        }))
+
+    def record_observations(self, observations: list[Observation]) -> None:
+        for observation in observations:
+            payload_hash, shape = shape_fingerprint(observation.payload)
+            observation_key = (
+                observation.source,
+                observation.scope_id,
+                observation.observed_at,
+                payload_hash,
+            )
+            if observation_key in self._observation_keys:
+                continue
+            self._observation_keys.add(observation_key)
+            base = {
+                "source": observation.source,
+                "scope_id": observation.scope_id,
+                "scope_label": observation.scope_label,
+                "account_no": observation.account_no,
+                "observed_at": observation.observed_at,
+                "metadata": observation.metadata,
+                "shape_hash": payload_hash,
+                "payload": observation.payload,
+            }
+            self.observations.append(redact_structure(base))
+            self.shapes.append(redact_structure({
+                "source": observation.source,
+                "scope_id": observation.scope_id,
+                "scope_label": observation.scope_label,
+                "shape_hash": payload_hash,
+                "shape": shape,
+            }))
+            for candidate in collect_generic_candidates(observation.payload):
+                self.candidates.append(redact_structure({
+                    "source": observation.source,
+                    "scope_id": observation.scope_id,
+                    "scope_label": observation.scope_label,
+                    "shape_hash": payload_hash,
+                    **candidate,
+                }))
+
+    def record_decisions(self, decisions: list[ParserDecision]) -> None:
+        self.decisions.extend(redact_structure(item.as_dict()) for item in decisions)
 
     def record_fetched_accounts(self, count: int) -> None:
         self.scrape["fetched_account_count"] = count
@@ -220,14 +297,21 @@ class DiagnosticCollector:
             "summary_txt": str(latest_dir / "summary.txt"),
             "summary_json": str(latest_dir / "summary.json"),
             "fields_json": str(latest_dir / "fields.redacted.json"),
+            "observations_json": str(latest_dir / "observations.redacted.json"),
+            "candidates_json": str(latest_dir / "candidates.redacted.json"),
+            "decisions_json": str(latest_dir / "parser-decisions.json"),
+            "shapes_json": str(latest_dir / "shapes.json"),
+            "timeline_json": str(latest_dir / "timeline.json"),
+            "bundle_zip": str(latest_dir / "sgcc-debug-bundle.zip"),
         }
 
         summary_text = self.summary_text()
         summary_json = self.summary_json()
         fields_json = self.fields_json()
+        debug_files = self.debug_files()
 
         try:
-            self._write_outputs(run_dir, latest_dir, summary_text, summary_json, fields_json)
+            self._write_outputs(run_dir, latest_dir, summary_text, summary_json, fields_json, debug_files)
         except Exception as exc:
             logging.warning(f"SGCC DIAG 写入诊断包失败: {redact_text(exc)}")
         logging.info("\n%s", summary_text.rstrip())
@@ -260,6 +344,14 @@ class DiagnosticCollector:
             f"fetched={_dash_none(self.scrape.get('fetched_account_count'))}, "
             f"saved={self.scrape.get('saved_count')}, "
             f"skipped={self.scrape.get('skipped_count')}"
+        )
+        lines.append(
+            "debug="
+            f"observations={len(self.observations)}, "
+            f"candidates={len(self.candidates)}, "
+            f"decisions={len(self.decisions)}, "
+            f"shapes={len(self.shapes)}, "
+            f"timeline={len(self.timeline)}"
         )
 
         for index, account in enumerate(self.accounts, 1):
@@ -319,6 +411,13 @@ class DiagnosticCollector:
             "pages": self.pages,
             "publish": self.publish,
             "errors": self.errors,
+            "debug": {
+                "observation_count": len(self.observations),
+                "candidate_count": len(self.candidates),
+                "decision_count": len(self.decisions),
+                "shape_count": len(self.shapes),
+                "timeline_count": len(self.timeline),
+            },
             "outputs": self.output_paths,
         })
 
@@ -329,6 +428,40 @@ class DiagnosticCollector:
             "run_id": self.run_id,
             "pages": self.field_pages,
         })
+
+    def debug_files(self) -> dict[str, Any]:
+        return {
+            "observations.redacted.json": redact_structure({
+                "status": self.status,
+                "generated_at": self.generated_at,
+                "run_id": self.run_id,
+                "observations": self.observations,
+            }),
+            "candidates.redacted.json": redact_structure({
+                "status": self.status,
+                "generated_at": self.generated_at,
+                "run_id": self.run_id,
+                "candidates": self.candidates,
+            }),
+            "parser-decisions.json": redact_structure({
+                "status": self.status,
+                "generated_at": self.generated_at,
+                "run_id": self.run_id,
+                "decisions": self.decisions,
+            }),
+            "shapes.json": redact_structure({
+                "status": self.status,
+                "generated_at": self.generated_at,
+                "run_id": self.run_id,
+                "shapes": self.shapes,
+            }),
+            "timeline.json": redact_structure({
+                "status": self.status,
+                "generated_at": self.generated_at,
+                "run_id": self.run_id,
+                "timeline": self.timeline,
+            }),
+        }
 
     def _run_dir(self) -> Path:
         stamp = re.sub(r"[^0-9T]", "", (self.started_at or now_iso()).split("+", 1)[0].replace("-", "").replace(":", ""))
@@ -342,9 +475,10 @@ class DiagnosticCollector:
         summary_text: str,
         summary_json: dict[str, Any],
         fields_json: dict[str, Any],
+        debug_files: dict[str, Any],
     ) -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
-        _write_package(run_dir, summary_text, summary_json, fields_json)
+        _write_package(run_dir, summary_text, summary_json, fields_json, debug_files)
 
         if latest_dir.exists() or latest_dir.is_symlink():
             if latest_dir.is_symlink() or latest_dir.is_file():
@@ -352,7 +486,7 @@ class DiagnosticCollector:
             else:
                 shutil.rmtree(latest_dir)
         latest_dir.mkdir(parents=True, exist_ok=True)
-        _write_package(latest_dir, summary_text, summary_json, fields_json)
+        _write_package(latest_dir, summary_text, summary_json, fields_json, debug_files)
 
 
 def account_data_diag_summary(account_data: Optional[AccountData]) -> dict[str, Any]:
@@ -414,20 +548,56 @@ def collect_snapshot_field_inventory(snapshot: dict[str, Any]) -> dict[str, Any]
     }
 
 
-def redact_structure(value: Any, key: str = "") -> Any:
+def redact_structure(
+    value: Any,
+    key: str = "",
+    *,
+    _depth: int = 0,
+    _max_depth: int = 14,
+    _max_items: int = 160,
+) -> Any:
+    if _depth > _max_depth:
+        return "<truncated:max-depth>"
     if is_dataclass(value):
         value = asdict(value)
     if isinstance(value, dict):
         result: dict[str, Any] = {}
-        for raw_key, child in value.items():
+        items = list(value.items())
+        for raw_key, child in items[:_max_items]:
             key_text = str(raw_key)
             safe_key = _safe_output_key(key_text)
-            result[safe_key] = redact_structure(child, key_text)
+            result[safe_key] = redact_structure(
+                child,
+                key_text,
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+                _max_items=_max_items,
+            )
+        if len(items) > _max_items:
+            result["<truncated>"] = f"{len(items) - _max_items} more keys"
         return result
     if isinstance(value, list):
-        return [redact_structure(item, key) for item in value]
+        items = [
+            redact_structure(
+                item,
+                key,
+                _depth=_depth + 1,
+                _max_depth=_max_depth,
+                _max_items=_max_items,
+            )
+            for item in value[:_max_items]
+        ]
+        if len(value) > _max_items:
+            items.append(f"<truncated:{len(value) - _max_items}-items>")
+        return items
     if isinstance(value, tuple):
-        return [redact_structure(item, key) for item in value]
+        return redact_structure(
+            list(value),
+            key,
+            _depth=_depth,
+            _max_depth=_max_depth,
+            _max_items=_max_items,
+        )
     return redact_scalar(value, key)
 
 
@@ -435,9 +605,17 @@ def redact_scalar(value: Any, key: str = "") -> Any:
     if value is None or isinstance(value, bool):
         return value
     key_text = str(key or "")
-    if isinstance(value, (int, float)) and not (
-        _is_secret_key(key_text) or _is_account_key(key_text) or _is_pii_key(key_text)
-    ):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        numeric_text = str(value)
+        if (
+            _is_secret_key(key_text)
+            or _is_account_key(key_text)
+            or _is_pii_key(key_text)
+            or _ACCOUNT_RE.fullmatch(numeric_text)
+            or _PHONE_RE.fullmatch(numeric_text)
+            or _ID_CARD_RE.fullmatch(numeric_text)
+        ):
+            return _mask_accounts_and_phones(numeric_text)
         return value
     text = str(value)
     if _is_secret_key(key_text):
@@ -448,8 +626,7 @@ def redact_scalar(value: Any, key: str = "") -> Any:
         if _ACCOUNT_RE.search(text) or _PHONE_RE.search(text):
             return _mask_accounts_and_phones(text)
         return "<redacted>"
-    if _URL_RE.search(text):
-        return _mask_accounts_and_phones(redact_url(text))
+    text = _URL_RE.sub(lambda match: redact_url(match.group(0)), text)
     return _truncate(_mask_accounts_and_phones(redact_text(text)), 240)
 
 
@@ -471,6 +648,8 @@ def _safe_env_snapshot() -> dict[str, Any]:
         "SGCC_DB_PATH",
         "SCRAPER_SETTLE_SECONDS",
         "DEBUG_MODE",
+        "SGCC_DEBUG",
+        "SGCC_DEBUG_DIR",
         "SGCC_DIAG",
         "SGCC_DIAG_DIR",
         "SGCC_LOGIN_COOLDOWN_ENABLED",
@@ -484,6 +663,7 @@ def _write_package(
     summary_text: str,
     summary_json: dict[str, Any],
     fields_json: dict[str, Any],
+    debug_files: Optional[dict[str, Any]] = None,
 ) -> None:
     (directory / "summary.txt").write_text(summary_text, encoding="utf-8")
     (directory / "summary.json").write_text(
@@ -494,6 +674,16 @@ def _write_package(
         json.dumps(fields_json, ensure_ascii=False, indent=2, default=str) + "\n",
         encoding="utf-8",
     )
+    for filename, payload in (debug_files or {}).items():
+        (directory / filename).write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
+            encoding="utf-8",
+        )
+    bundle_path = directory / "sgcc-debug-bundle.zip"
+    with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for path in sorted(directory.iterdir()):
+            if path.is_file() and path != bundle_path:
+                bundle.write(path, arcname=path.name)
 
 
 def _iter_snapshot_roots(snapshot: dict[str, Any]):
@@ -666,7 +856,9 @@ def _dash_none(value: Any) -> str:
 
 def _mask_accounts_and_phones(text: str) -> str:
     text = _ACCOUNT_RE.sub(lambda m: mask_account_no(m.group(1)), str(text))
-    return _PHONE_RE.sub(lambda m: mask_account_no(m.group(1), keep_last=2), text)
+    text = _PHONE_RE.sub(lambda m: mask_account_no(m.group(1), keep_last=2), text)
+    text = _ID_CARD_RE.sub("<redacted-id>", text)
+    return _EMAIL_RE.sub("<redacted-email>", text)
 
 
 def _is_secret_key(key: str) -> bool:

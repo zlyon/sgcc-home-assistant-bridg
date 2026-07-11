@@ -122,7 +122,7 @@ class SgccLogin:
             self._click_button(driver, By.XPATH, '//*[@id="login_box"]/div[2]/div[2]/form/div[1]/div[2]/div[2]/div/a')
             code = input("请输入手机验证码: ")
             input_elements[3].send_keys(code)
-            logging.info(f"已输入验证码: {code}。\r")
+            logging.info("已输入手机验证码。\r")
             # 点击登录按钮
             self._click_button(driver, By.XPATH, '//*[@id="login_box"]/div[2]/div[2]/form/div[2]/div/button/span')
             time.sleep(self.config.RETRY_WAIT_TIME_OFFSET_UNIT*2)

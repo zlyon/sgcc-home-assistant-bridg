@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         感谢反馈。请先确认：日志、截图、配置里不要包含手机号、密码、户号全量、HA Token、LLM API Key、MQTT 密码等敏感信息。
-        数据抓取、金额/余额/预付费/欠费/账单金额、用电范围和发布问题优先提供 `SGCC_DIAG=true` 生成的诊断摘要；诊断摘要已经包含字段清单，网页 HTML 和页面源码分析可省略。
+        数据抓取、金额/余额/预付费/欠费/账单金额、用电范围和发布问题优先提供 `SGCC_DEBUG=true` 生成的脱敏 Debug bundle；它包含 Network/Vuex/Component/DOM、结构指纹和 parser decision，网页 HTML 和页面源码分析可省略。
         同一个 issue 里如果有多位用户补充，请分别说明自己的省份、用电/计费类型和诊断日志；不同省份或不同页面字段可能不是同一个问题。
 
   - type: dropdown
@@ -128,11 +128,11 @@ body:
   - type: textarea
     id: diag_summary
     attributes:
-      label: SGCC_DIAG 诊断摘要
-      description: 数据抓取、金额/余额、日/月/年用电、登录会话、MQTT/HA 发布问题都优先提供这段摘要。开启 SGCC_DIAG=true 后重新运行一次，复制同一次运行里的 SGCC DIAG SUMMARY；也可以附上 /data/diag/latest 下的脱敏文件。提交前请保留脱敏版本：密码、token、手机号和完整户号以遮罩形式出现。
+      label: SGCC_DEBUG 摘要 / Debug bundle
+      description: 开启 SGCC_DEBUG=true 后重新运行一次，粘贴摘要并优先附上 /data/debug/latest/sgcc-debug-bundle.zip。提交前仍请检查包内没有账号、密码、token、手机号和完整户号。
       placeholder: |
         开启方式：
-        SGCC_DIAG=true
+        SGCC_DEBUG=true
 
         运行一次后请粘贴日志里的完整摘要块：
         ========== SGCC DIAG SUMMARY START ==========
@@ -161,7 +161,7 @@ body:
     id: logs
     attributes:
       label: 相关日志
-      description: 请贴关键日志，不要贴密钥和完整账号。Docker 可用 docker compose logs --since=60m sgcc_electricity_app；Add-on 可在 HA Supervisor 日志页复制。数据类问题请优先填写上面的 SGCC_DIAG 诊断摘要。
+      description: 请贴关键日志，不要贴密钥和完整账号。Docker 可用 docker compose logs --since=60m sgcc_electricity_app；Add-on 可在 HA Supervisor 日志页复制。数据类问题请优先填写上面的 SGCC_DEBUG 摘要。
       render: text
     validations:
       required: false
@@ -170,7 +170,7 @@ body:
     id: config
     attributes:
       label: 脱敏后的关键配置
-      description: 例如 SGCC_BROWSER_MODE、LOGIN_FALLBACK、LLM_BASE_URL、LLM_MODEL、MQTT_HOST、MQTT_DISCOVERY_PREFIX、JOB_START_TIME、SGCC_DIAG、SGCC_DIAG_DIR。密码/token/key 请用遮罩值。
+      description: 例如 SGCC_BROWSER_MODE、LOGIN_FALLBACK、LLM_BASE_URL、LLM_MODEL、MQTT_HOST、MQTT_DISCOVERY_PREFIX、JOB_START_TIME、SGCC_DEBUG、SGCC_DEBUG_DIR。密码/token/key 请用遮罩值。
       render: text
     validations:
       required: false
@@ -184,7 +184,7 @@ body:
           required: true
         - label: 如果是国网数据问题，我已经确认手动登录 95598/网上国网页面时能看到对应数据。
           required: false
-        - label: 如果是国网数据、金额字段或发布问题，我已经贴出 SGCC_DIAG=true 生成的 SGCC DIAG SUMMARY，或说明当前环境暂未提供诊断的原因。
+        - label: 如果是国网数据、金额字段或发布问题，我已经提供 SGCC_DEBUG=true 生成的摘要/脱敏 bundle，或说明当前环境暂未提供的原因。
           required: false
         - label: 如果是 HA 实体问题，我已经尝试等待一次缓存重发布或重启 HA 后观察 retained MQTT 实体。
           required: false

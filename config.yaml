@@ -48,8 +48,11 @@ options:
   MQTT_DISCOVERY_PREFIX: "homeassistant"
   SGCC_DB_PATH: "/data/sgcc.sqlite3"
   SCRAPER_SETTLE_SECONDS: 3.0
+  SGCC_DEBUG: false
+  SGCC_DEBUG_DIR: "/data/debug"
   SGCC_DIAG: false
   SGCC_DIAG_DIR: "/data/diag"
+  SGCC_LOGIN_METHOD: "password"
   REPUBLISH_INTERVAL_MINUTES: 15
   SGCC_BROWSER_MODE: "browser-service"
   SGCC_CDP_ADDRESS: "127.0.0.1:19222"
@@ -87,8 +90,11 @@ schema:
   MQTT_DISCOVERY_PREFIX: str
   SGCC_DB_PATH: str
   SCRAPER_SETTLE_SECONDS: float(0,30)
+  SGCC_DEBUG: bool
+  SGCC_DEBUG_DIR: str
   SGCC_DIAG: bool
   SGCC_DIAG_DIR: str
+  SGCC_LOGIN_METHOD: "list(password|phone-code)"
   REPUBLISH_INTERVAL_MINUTES: int(1,1440)
   SGCC_BROWSER_MODE: "list(browser-service|local|host-cdp|cdp)"
   SGCC_CDP_ADDRESS: str

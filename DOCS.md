@@ -222,8 +222,12 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `MQTT_DISCOVERY_PREFIX` | Home Assistant MQTT Discovery 前缀，默认 `homeassistant`。 |
 | `SGCC_DB_PATH` | SQLite 数据库路径，默认 `/data/sgcc.sqlite3`。 |
 | `SCRAPER_SETTLE_SECONDS` | Path B 抓取等待 Vuex/组件数据稳定的秒数。 |
-| `SGCC_DIAG` | 单开关诊断模式，默认 `false`；开启后输出 `SGCC DIAG SUMMARY` 日志，并写入脱敏诊断包。 |
-| `SGCC_DIAG_DIR` | 诊断包目录，默认 `/data/diag`；最新一次固定在 `/data/diag/latest`。 |
+| `SGCC_DEBUG` | 完整 Debug 取证模式，默认 `false`；记录多源 observation、结构指纹、候选字段和 parser decision，不改变发布结果。 |
+| `SGCC_DEBUG_DIR` | Debug bundle 目录，默认 `/data/debug`；最新一次固定在 `/data/debug/latest`。 |
+| `SGCC_DIAG` | 旧诊断开关兼容别名；设为 `true` 等价于 `SGCC_DEBUG=true`。 |
+| `SGCC_DIAG_DIR` | 旧诊断目录兼容配置；未设置 `SGCC_DEBUG_DIR` 时使用。 |
+| `DEBUG_MODE` | 旧环境变量兼容别名；仅开启 Debug，不再切换手机验证码登录。 |
+| `SGCC_LOGIN_METHOD` | 登录方式；默认 `password`，仅显式设为 `phone-code` 时读取手机验证码。 |
 | `REPUBLISH_INTERVAL_MINUTES` | 已有数据重发布或补抓的间隔分钟数。 |
 | `SGCC_BROWSER_MODE` | 浏览器模式，Docker Compose 和 Add-on 默认 `browser-service`；旧模式可设 `local`。 |
 | `SGCC_CDP_ADDRESS` | `browser-service` / `host-cdp` 使用的 Chrome DevTools 地址，默认 `127.0.0.1:19222`。 |
@@ -380,9 +384,9 @@ Docker Compose 和 Add-on 部署优先使用默认的 `SGCC_BROWSER_MODE=browser
 - `PUBLISHER` 是否为 `mqtt` 或 `both`。
 - 容器日志里是否有 MQTT 发布失败。
 
-### 诊断模式与 issue 反馈
+### Debug 模式与 issue 反馈
 
-`SGCC_DIAG=true` 是面向 issue 反馈的单开关诊断模式。开启后重新运行一次抓取，程序会在日志中输出可复制的摘要块：
+`SGCC_DEBUG=true` 是面向未知省份、未知字段和抓取失败的完整取证模式。它执行和正常模式相同的账户切换、动态抓取、Store 与发布流程，仅额外保留递归脱敏证据。开启后重新运行一次抓取，程序会在日志中输出可复制的兼容摘要块：
 
 ```text
 ========== SGCC DIAG SUMMARY START ==========
@@ -390,17 +394,24 @@ Docker Compose 和 Add-on 部署优先使用默认的 `SGCC_BROWSER_MODE=browser
 ========== SGCC DIAG SUMMARY END ==========
 ```
 
-同时会写入脱敏诊断包：
+Debug bundle 默认写入：
 
 ```text
-/data/diag/latest/summary.txt
-/data/diag/latest/summary.json
-/data/diag/latest/fields.redacted.json
+/data/debug/latest/
+├── summary.txt
+├── summary.json
+├── fields.redacted.json
+├── observations.redacted.json
+├── candidates.redacted.json
+├── parser-decisions.json
+├── shapes.json
+├── timeline.json
+└── sgcc-debug-bundle.zip
 ```
 
-诊断内容覆盖当前运行环境、登录会话、账户选择、页面解析、金额候选字段、日/月/年用电范围、HA REST/MQTT 发布结果和失败错误。`fields.redacted.json` 记录 Path B 已采集的 Vuex state/getters 和 Vue 组件 `data` 字段清单；它不依赖渲染后的 DOM 文本猜测业务字段，也不会改变实际解析或发布结果。
+其中 observation 按户号和页面 scope 关联 Network XHR/fetch、Vuex、受预算约束的 Vue Component `$data` 与 DOM label/value。Component 快照具有组件级和全局节点预算、深度/数组/字段上限及执行时间上限；截断位置保留在 bundle。parser decision 记录每个来源是接受、拒绝还是 fallback；未知金额只进入候选，不会被猜测发布。
 
-金额问题里的“当前账户余额、预付费余额、应交/欠费、出账金额、上期/上月余额”可能来自不同字段。字段兼容以 `SGCC_DIAG` 返回的真实脱敏字段为依据；提交 issue 时贴 `SGCC DIAG SUMMARY` 摘要，并在需要时附上 `/data/diag/latest` 里的脱敏文件。
+提交 issue 时优先附上 `sgcc-debug-bundle.zip` 和人工对照。包内完整户号、手机号、姓名、地址、password、token、cookie、authorization 等字段会递归脱敏。旧 `SGCC_DIAG=true` 保持兼容；仅开启该旧开关时继续使用 `SGCC_DIAG_DIR`。
 
 
 ### 日/月历史数量不固定

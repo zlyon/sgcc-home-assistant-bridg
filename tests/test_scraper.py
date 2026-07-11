@@ -4,6 +4,7 @@ import sys
 import time
 import types
 import unittest
+from unittest.mock import patch
 
 
 def _install_selenium_stub_if_missing():
@@ -281,6 +282,58 @@ class DailyRangeWaitTestCase(unittest.TestCase):
         scraper._click_daily_range = lambda text: False
 
         self.assertFalse(scraper._expand_daily_range_to_30_days())
+
+
+class SnapshotModeTestCase(unittest.TestCase):
+    def test_debug_readiness_probe_uses_light_snapshot(self):
+        class FakeDriver:
+            current_url = "https://95598.cn/osgweb/electricityCharge"
+
+        scraper = Scraper(driver=FakeDriver(), wait_seconds=1, settle_seconds=0)
+        with (
+            patch.dict(os.environ, {"SGCC_DEBUG": "true"}),
+            patch(
+                "sgcc_ha_bridge.scraper.vue_state.selected_store_snapshot",
+                return_value={"state": {}},
+            ),
+            patch(
+                "sgcc_ha_bridge.scraper.vue_state.selected_vue_data",
+                return_value=[],
+            ) as light,
+            patch(
+                "sgcc_ha_bridge.scraper.vue_state.selected_vue_debug_data",
+                return_value=[],
+            ) as wide,
+        ):
+            scraper._snapshot()
+
+        light.assert_called_once_with(scraper.driver, include_diag_fields=True)
+        wide.assert_not_called()
+
+    def test_debug_parse_snapshot_uses_complete_bounded_component_data(self):
+        class FakeDriver:
+            current_url = "https://95598.cn/osgweb/electricityCharge"
+
+        scraper = Scraper(driver=FakeDriver(), wait_seconds=1, settle_seconds=0)
+        with (
+            patch.dict(os.environ, {"SGCC_DEBUG": "true"}),
+            patch(
+                "sgcc_ha_bridge.scraper.vue_state.selected_store_snapshot",
+                return_value={"state": {}},
+            ),
+            patch(
+                "sgcc_ha_bridge.scraper.vue_state.selected_vue_data",
+                return_value=[],
+            ) as light,
+            patch(
+                "sgcc_ha_bridge.scraper.vue_state.selected_vue_debug_data",
+                return_value=[],
+            ) as wide,
+        ):
+            scraper._snapshot(wide_debug=True)
+
+        wide.assert_called_once_with(scraper.driver)
+        light.assert_not_called()
 
 
 if __name__ == "__main__":
