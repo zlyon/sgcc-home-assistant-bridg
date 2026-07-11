@@ -130,3 +130,23 @@ def test_flush_waits_for_pending_body_command_to_finish():
     thread.join()
 
     assert recorder._body_commands == {}
+
+
+def test_flush_can_wait_for_only_one_scope():
+    recorder = NetworkRecorder(FakeDriver(), allowed_hosts={"95598.cn"})
+    first = CaptureScope.create("账户余额", "1234567890123")
+    second = CaptureScope.create("月度电费", "1234567890999")
+    recorder._body_commands[1] = {"request_id": "request-1", "scope": first}
+    recorder._body_commands[2] = {"request_id": "request-2", "scope": second}
+
+    def complete_first():
+        time.sleep(0.02)
+        recorder._body_commands.pop(1, None)
+
+    thread = threading.Thread(target=complete_first)
+    thread.start()
+    recorder.flush(timeout=0.5, scope_id=first.id)
+    thread.join()
+
+    assert 1 not in recorder._body_commands
+    assert 2 in recorder._body_commands

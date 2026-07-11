@@ -18,9 +18,9 @@ import threading
 import time
 from urllib.request import urlopen
 
-HOST = os.getenv("SGCC_BROWSER_SERVICE_HOST", "0.0.0.0")
+HOST = os.getenv("SGCC_BROWSER_SERVICE_HOST", "127.0.0.1")
 PORT = int(os.getenv("SGCC_BROWSER_SERVICE_PORT", "39222"))
-CDP_HOST = os.getenv("SGCC_BROWSER_CDP_HOST", "0.0.0.0")
+CDP_HOST = os.getenv("SGCC_BROWSER_CDP_HOST", "127.0.0.1")
 CDP_PORT = int(os.getenv("SGCC_BROWSER_CDP_PORT", "9222"))
 CDP_FORWARD_ENABLED = os.getenv("SGCC_BROWSER_CDP_FORWARD_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 _CDP_INTERNAL_PORT_RAW = os.getenv("SGCC_BROWSER_CDP_INTERNAL_PORT", "").strip()

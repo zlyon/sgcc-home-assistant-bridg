@@ -60,9 +60,20 @@ _ACCOUNT_KEY_RE = re.compile(
 )
 _PHONE_RE = re.compile(r"(?<!\d)(1[3-9]\d{9})(?!\d)")
 _ACCOUNT_RE = re.compile(r"(?<!\d)(\d{13})(?!\d)")
+_LONG_NUMERIC_ID_RE = re.compile(r"\d{13,}")
 _ID_CARD_RE = re.compile(r"(?<![0-9A-Za-z])(?:\d{15}|\d{17}[0-9Xx])(?![0-9A-Za-z])")
 _EMAIL_RE = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?![A-Za-z0-9.-])")
 _URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+_SENSITIVE_LABEL_RE = re.compile(
+    r"(password|passwd|pwd|token|secret|cookie|authorization|api[_ -]?key|"
+    r"phone|mobile|tel|address|addr|cust(?:omer)?name|consname|realname|"
+    r"id[_ -]?card|identity|certificate|email|account(?:no|number)?|acctno|"
+    r"姓名|地址|手机号|电话|身份证|证件|邮箱|户号|用户编号|客户编号|账号|"
+    r"密码|口令|令牌|验证码)",
+    re.IGNORECASE,
+)
+_LABEL_KEYS = {"label", "title", "fieldname", "keyname"}
+_LABEL_VALUE_KEYS = {"value", "val", "content", "text", "displayvalue", "fieldvalue"}
 
 
 def env_truthy(name: str, default: bool = False) -> bool:
@@ -477,7 +488,8 @@ class DiagnosticCollector:
         fields_json: dict[str, Any],
         debug_files: dict[str, Any],
     ) -> None:
-        run_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_private_dir(self.output_root)
+        _ensure_private_dir(run_dir)
         _write_package(run_dir, summary_text, summary_json, fields_json, debug_files)
 
         if latest_dir.exists() or latest_dir.is_symlink():
@@ -485,7 +497,7 @@ class DiagnosticCollector:
                 latest_dir.unlink()
             else:
                 shutil.rmtree(latest_dir)
-        latest_dir.mkdir(parents=True, exist_ok=True)
+        _ensure_private_dir(latest_dir)
         _write_package(latest_dir, summary_text, summary_json, fields_json, debug_files)
 
 
@@ -533,7 +545,8 @@ def collect_snapshot_field_inventory(snapshot: dict[str, Any]) -> dict[str, Any]
     shapes: list[dict[str, Any]] = []
     state = {"truncated": False}
 
-    for root_path, root_value in _iter_snapshot_roots(snapshot):
+    redacted_snapshot = redact_structure(snapshot)
+    for root_path, root_value in _iter_snapshot_roots(redacted_snapshot):
         _walk_field_inventory(root_value, root_path, fields, shapes, state, depth=0)
         if len(fields) >= MAX_FIELD_VALUES_PER_PAGE and len(shapes) >= MAX_SHAPES_PER_PAGE:
             state["truncated"] = True
@@ -563,16 +576,24 @@ def redact_structure(
     if isinstance(value, dict):
         result: dict[str, Any] = {}
         items = list(value.items())
+        sensitive_label = any(
+            str(raw_key).casefold() in _LABEL_KEYS
+            and _SENSITIVE_LABEL_RE.search(str(child or ""))
+            for raw_key, child in items
+        )
         for raw_key, child in items[:_max_items]:
             key_text = str(raw_key)
             safe_key = _safe_output_key(key_text)
-            result[safe_key] = redact_structure(
-                child,
-                key_text,
-                _depth=_depth + 1,
-                _max_depth=_max_depth,
-                _max_items=_max_items,
-            )
+            if sensitive_label and key_text.casefold() in _LABEL_VALUE_KEYS:
+                result[safe_key] = "<redacted>"
+            else:
+                result[safe_key] = redact_structure(
+                    child,
+                    key_text,
+                    _depth=_depth + 1,
+                    _max_depth=_max_depth,
+                    _max_items=_max_items,
+                )
         if len(items) > _max_items:
             result["<truncated>"] = f"{len(items) - _max_items} more keys"
         return result
@@ -607,6 +628,13 @@ def redact_scalar(value: Any, key: str = "") -> Any:
     key_text = str(key or "")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         numeric_text = str(value)
+        integer_text = (
+            str(int(value))
+            if isinstance(value, float) and value.is_integer()
+            else numeric_text
+        )
+        if _LONG_NUMERIC_ID_RE.fullmatch(integer_text):
+            return "<redacted-numeric-id>"
         if (
             _is_secret_key(key_text)
             or _is_account_key(key_text)
@@ -665,25 +693,37 @@ def _write_package(
     fields_json: dict[str, Any],
     debug_files: Optional[dict[str, Any]] = None,
 ) -> None:
-    (directory / "summary.txt").write_text(summary_text, encoding="utf-8")
-    (directory / "summary.json").write_text(
+    _ensure_private_dir(directory)
+    _write_private_text(directory / "summary.txt", summary_text)
+    _write_private_text(
+        directory / "summary.json",
         json.dumps(summary_json, ensure_ascii=False, indent=2, default=str) + "\n",
-        encoding="utf-8",
     )
-    (directory / "fields.redacted.json").write_text(
+    _write_private_text(
+        directory / "fields.redacted.json",
         json.dumps(fields_json, ensure_ascii=False, indent=2, default=str) + "\n",
-        encoding="utf-8",
     )
     for filename, payload in (debug_files or {}).items():
-        (directory / filename).write_text(
+        _write_private_text(
+            directory / filename,
             json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
-            encoding="utf-8",
         )
     bundle_path = directory / "sgcc-debug-bundle.zip"
     with zipfile.ZipFile(bundle_path, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
         for path in sorted(directory.iterdir()):
             if path.is_file() and path != bundle_path:
                 bundle.write(path, arcname=path.name)
+    bundle_path.chmod(0o600)
+
+
+def _ensure_private_dir(directory: Path) -> None:
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    directory.chmod(0o700)
+
+
+def _write_private_text(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+    path.chmod(0o600)
 
 
 def _iter_snapshot_roots(snapshot: dict[str, Any]):
@@ -856,6 +896,7 @@ def _dash_none(value: Any) -> str:
 
 def _mask_accounts_and_phones(text: str) -> str:
     text = _ACCOUNT_RE.sub(lambda m: mask_account_no(m.group(1)), str(text))
+    text = _LONG_NUMERIC_ID_RE.sub("<redacted-numeric-id>", text)
     text = _PHONE_RE.sub(lambda m: mask_account_no(m.group(1), keep_last=2), text)
     text = _ID_CARD_RE.sub("<redacted-id>", text)
     return _EMAIL_RE.sub("<redacted-email>", text)

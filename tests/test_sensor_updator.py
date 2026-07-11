@@ -3,9 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from sgcc_ha_bridge import sensor_updator
 
+from sgcc_ha_bridge.entity_identity import account_entity_postfix
+from sgcc_ha_bridge.const import BALANCE_SENSOR_NAME
 from sgcc_ha_bridge.sensor_updator import SensorUpdator
 
 
@@ -48,6 +51,68 @@ class CacheOnlySensorUpdator(SensorUpdator):
 
 
 class SensorUpdatorCacheValuesTestCase(unittest.TestCase):
+    def test_legacy_rest_cleanup_runs_only_after_successful_new_publish(self):
+        account_no = "1234567890123"
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.dict(
+            "os.environ",
+            {"SGCC_CLEANUP_LEGACY_ENTITY_IDS": "true"},
+        ):
+            successful = CacheOnlySensorUpdator(Path(tmpdir) / "success.json")
+            self.assertTrue(successful.update_one_userid(
+                user_id=account_no,
+                balance=88.0,
+                last_daily_date=None,
+                last_daily_usage=None,
+                yearly_charge=None,
+                yearly_usage=None,
+                month_charge=None,
+                month_usage=None,
+            ))
+            self.assertIn(
+                ("delete", BALANCE_SENSOR_NAME + "_0123"),
+                successful.calls,
+            )
+
+            failed = CacheOnlySensorUpdator(Path(tmpdir) / "failed.json")
+            failed.update_balance = lambda *args, **kwargs: False
+            self.assertFalse(failed.update_one_userid(
+                user_id=account_no,
+                balance=88.0,
+                last_daily_date=None,
+                last_daily_usage=None,
+                yearly_charge=None,
+                yearly_usage=None,
+                month_charge=None,
+                month_usage=None,
+            ))
+            self.assertNotIn(
+                ("delete", BALANCE_SENSOR_NAME + "_0123"),
+                failed.calls,
+            )
+
+    def test_notification_exception_does_not_block_rest_publish(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            updator = CacheOnlySensorUpdator(Path(tmpdir) / "sgcc_cache.json")
+
+            def fail_notify(*args):
+                raise RuntimeError("push down")
+
+            updator.balance_notify = fail_notify
+            result = updator.update_one_userid(
+                user_id="1234567890123",
+                balance=88.0,
+                last_daily_date=None,
+                last_daily_usage=None,
+                yearly_charge=None,
+                yearly_usage=None,
+                month_charge=None,
+                month_usage=None,
+            )
+
+            postfix = account_entity_postfix("1234567890123")
+            self.assertTrue(result)
+            self.assertIn(("balance", postfix, 88.0, None), updator.calls)
+
     def test_cache_values_keep_publish_backfill_out_of_legacy_cache(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_file = Path(tmpdir) / "sgcc_cache.json"
@@ -79,7 +144,8 @@ class SensorUpdatorCacheValuesTestCase(unittest.TestCase):
             )
 
             self.assertFalse(cache_file.exists())
-            self.assertIn(("daily", "_0123", "2026-06-18", 9.5), updator.calls)
+            postfix = account_entity_postfix("1234567890123")
+            self.assertIn(("daily", postfix, "2026-06-18", 9.5), updator.calls)
             self.assertTrue(any(call[0] == "tou" for call in updator.calls))
 
     def test_default_cache_values_preserve_existing_republish_behavior(self):
@@ -122,10 +188,14 @@ class SensorUpdatorCacheValuesTestCase(unittest.TestCase):
                 arrears=70.0,
             )
 
-            self.assertNotIn(("balance", "_0123", 127.5, None), updator.calls)
-            self.assertIn(("delete", "sensor.electricity_charge_balance_0123"), updator.calls)
-            self.assertIn(("prepay", "_0123", 127.5), updator.calls)
-            self.assertIn(("arrears", "_0123", 70.0), updator.calls)
+            postfix = account_entity_postfix("1234567890123")
+            self.assertNotIn(("balance", postfix, 127.5, None), updator.calls)
+            self.assertIn(
+                ("delete", "sensor.electricity_charge_balance" + postfix),
+                updator.calls,
+            )
+            self.assertIn(("prepay", postfix, 127.5), updator.calls)
+            self.assertIn(("arrears", postfix, 70.0), updator.calls)
             entry = json.loads(cache_file.read_text())["1234567890123"]
             self.assertIsNone(entry["balance"])
             self.assertEqual(entry["prepay_balance"], 127.5)
@@ -150,9 +220,14 @@ class RestFailureSensorUpdator(SensorUpdator):
 class SensorUpdatorRestResultTestCase(unittest.TestCase):
     def setUp(self):
         self.original_post = sensor_updator.requests.post
+        self.original_delete = sensor_updator.requests.delete
+        sensor_updator.requests.delete = (
+            lambda *args, **kwargs: SimpleNamespace(status_code=404, content=b"")
+        )
 
     def tearDown(self):
         sensor_updator.requests.post = self.original_post
+        sensor_updator.requests.delete = self.original_delete
 
     def test_send_url_returns_false_on_http_failure(self):
         with tempfile.TemporaryDirectory() as tmpdir:

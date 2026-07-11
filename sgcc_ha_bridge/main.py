@@ -318,8 +318,8 @@ def republish_mqtt_from_legacy_ha_state(updator: SensorUpdator | None, config: F
         logging.info("REST 状态读取器未初始化，跳过 MQTT 旧 HA 状态兜底重发布。")
         return False
 
-    postfixes = _legacy_cache_postfixes(updator)
-    if not postfixes:
+    account_nos = _legacy_cache_account_nos(updator)
+    if not account_nos:
         logging.info("未找到当天旧 REST 缓存户号，跳过 MQTT 旧 HA 状态兜底重发布。")
         return False
 
@@ -328,8 +328,8 @@ def republish_mqtt_from_legacy_ha_state(updator: SensorUpdator | None, config: F
             if not publisher.connected:
                 return False
             published_count = 0
-            for postfix in postfixes:
-                account_data = _account_data_from_ha_states(updator, postfix)
+            for account_no in account_nos:
+                account_data = _account_data_from_ha_states(updator, account_no)
                 if account_data is None:
                     continue
                 if publisher.publish_account_data(account_data):
@@ -342,7 +342,7 @@ def republish_mqtt_from_legacy_ha_state(updator: SensorUpdator | None, config: F
         return False
 
 
-def _legacy_cache_postfixes(updator: SensorUpdator) -> list[str]:
+def _legacy_cache_account_nos(updator: SensorUpdator) -> list[str]:
     cache_file = updator._get_cache_file()
     if not os.path.exists(cache_file):
         return []
@@ -354,7 +354,7 @@ def _legacy_cache_postfixes(updator: SensorUpdator) -> list[str]:
         return []
 
     today_str = datetime.now().strftime("%Y-%m-%d")
-    postfixes: list[str] = []
+    account_nos: list[str] = []
     for user_id, values in data.items():
         if not isinstance(values, dict):
             continue
@@ -365,14 +365,36 @@ def _legacy_cache_postfixes(updator: SensorUpdator) -> list[str]:
         if not has_useful_legacy_cache_entry(values):
             logging.info(f"旧 REST 缓存用户 {str(user_id)[-4:]} 没有有效国网业务数据，跳过 MQTT 兜底重发布。")
             continue
-        suffix = str(user_id)[-4:]
-        if len(suffix) == 4 and suffix not in postfixes:
-            postfixes.append(suffix)
-    return postfixes
+        account_no = str(user_id).strip()
+        if len(account_no) != 13 or not account_no.isdigit():
+            logging.warning("旧 REST 缓存包含非完整户号键，无法建立稳定实体身份，跳过该条目。")
+            continue
+        if account_no not in account_nos:
+            account_nos.append(account_no)
+
+    suffix_counts: dict[str, int] = {}
+    for account_no in account_nos:
+        suffix = account_no[-4:]
+        suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
+    ambiguous_suffixes = {
+        suffix for suffix, count in suffix_counts.items() if count > 1
+    }
+    for suffix in sorted(ambiguous_suffixes):
+        logging.warning(
+            f"旧 REST 实体后缀 ****{suffix} 对应多个完整户号，历史状态不可区分；"
+            "跳过旧状态兜底并转真实国网抓取。"
+        )
+    return [
+        account_no
+        for account_no in account_nos
+        if account_no[-4:] not in ambiguous_suffixes
+    ]
 
 
-def _account_data_from_ha_states(updator: SensorUpdator, postfix: str) -> AccountData | None:
-    suffix = f"_{postfix}"
+def _account_data_from_ha_states(updator: SensorUpdator, account_no: str) -> AccountData | None:
+    if len(account_no) != 13 or not account_no.isdigit():
+        return None
+    suffix = f"_{account_no[-4:]}"
     states = {
         "balance": _state_float(updator.get_sensor_state(BALANCE_SENSOR_NAME + suffix)),
         "prepay_balance": _state_float(updator.get_sensor_state(PREPAY_BALANCE_SENSOR_NAME + suffix)),
@@ -390,7 +412,6 @@ def _account_data_from_ha_states(updator: SensorUpdator, postfix: str) -> Accoun
         return None
 
     now = datetime.now()
-    account_no = f"000000000{postfix}"
     balance = None
     if states["balance"] is not None or states["prepay_balance"] is not None:
         balance = Balance(

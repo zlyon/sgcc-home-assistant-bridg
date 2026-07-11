@@ -1,13 +1,21 @@
-"""
-本脚本提供错误截图保存的封装功能。
-"""
+"""Bounded, redacted browser incident records for SGCC failures."""
 
-import os
-import logging
 import functools
 import json
+import logging
+import os
+import shutil
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Optional
+
+from .diag import redact_structure
+from .redact import redact_text, redact_url
+
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 class ErrorWatcher:
 
@@ -17,9 +25,8 @@ class ErrorWatcher:
         初始化 ErrorWatcher 单例实例。
         在使用 ErrorWatcher 之前应先调用此方法。
         可接受以下关键字参数：
-        - root_dir: 保存截图的根目录（默认为当前工作目录）。
-        - screenshot_dir: 截图保存的目录（默认为根目录下的 'screenshots' 目录）。
-        - driver: 用于截图的驱动实例（默认为 None）。
+        - root_dir: 保存脱敏事件记录的根目录（默认为当前工作目录）。
+        - driver: 用于提取最小现场信息的驱动实例（默认为 None）。
         """
         if cls._instance is None:
             cls._instance = cls(**kwargs)
@@ -34,8 +41,7 @@ class ErrorWatcher:
     @classmethod
     def watch(cls, func: Optional[Callable] = None, **options) -> Callable:
         """
-        装饰器，用于包装函数并捕获异常。
-        如果发生错误，将截取屏幕截图。
+        装饰器，用于包装函数并记录异常现场。
 
         用法：
         1. @ErrorWatcher.watch
@@ -59,7 +65,7 @@ class ErrorWatcher:
 
     def set_driver(self, driver):
         """
-        设置用于截图的驱动。
+        设置用于提取最小现场信息的驱动。
         """
         self.driver = driver
 
@@ -80,10 +86,12 @@ class ErrorWatcher:
     # 以下为私有方法
 
     def __init__(self, **kwargs):
-        self.root_dir = kwargs.get('root_dir', os.getcwd())
-        self.screenshot_dir = kwargs.get('screenshot_dir', os.path.join(self.root_dir, 'screenshots'))
-        if not os.path.exists(self.screenshot_dir):
-            os.makedirs(self.screenshot_dir)
+        self.root_dir = Path(kwargs.get("root_dir", os.getcwd()))
+        self.root_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            self.root_dir.chmod(0o700)
+        except OSError:
+            pass
         self.driver = kwargs.get('driver', None)
 
     _instance = None
@@ -97,60 +105,78 @@ class ErrorWatcher:
             raise e
 
     def capture(self, label: str, error: Exception | str | None = None) -> str | None:
-        """Save screenshot/html/meta for non-exception failure branches."""
+        """Save a bounded, redacted incident record for failure branches.
+
+        Raw HTML and browser logs are never written. Screenshots are opt-in
+        because rendered account names/addresses cannot be reliably redacted.
+        """
         driver = self.driver
         if not driver:
             logging.error("未设置截图驱动。")
             return None
 
         safe_label = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in label)[:80] or "capture"
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        capture_dir = os.path.join(self.root_dir, f'{safe_label}_{timestamp}')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        capture_dir = self.root_dir / f"{safe_label}_{timestamp}"
         try:
-            os.makedirs(capture_dir, exist_ok=True)
-            screenshot_path = os.path.join(capture_dir, 'screenshot.png')
-            html_path = os.path.join(capture_dir, 'page.html')
-            meta_path = os.path.join(capture_dir, 'meta.json')
-
-            driver.save_screenshot(screenshot_path)
-            with open(html_path, 'w', encoding='utf-8') as f:
-                f.write(driver.page_source or '')
+            capture_dir.mkdir(parents=True, exist_ok=False, mode=0o700)
 
             try:
                 browser_logs = driver.get_log('browser')[-50:]
             except Exception as log_error:
-                browser_logs = [{'error': type(log_error).__name__ + ': ' + str(log_error)}]
+                browser_logs = [{"error": f"{type(log_error).__name__}: {redact_text(log_error)}"}]
+            log_levels: dict[str, int] = {}
+            for item in browser_logs:
+                level = (
+                    str(item.get("level") or "UNKNOWN").upper()
+                    if isinstance(item, dict)
+                    else "UNKNOWN"
+                )
+                log_levels[level] = log_levels.get(level, 0) + 1
 
-            meta = {
+            meta = redact_structure({
                 'label': label,
-                'error': str(error) if error is not None else '',
-                'current_url': getattr(driver, 'current_url', ''),
-                'title': getattr(driver, 'title', ''),
-                'browser_logs': browser_logs,
-            }
-            with open(meta_path, 'w', encoding='utf-8') as f:
-                json.dump(meta, f, ensure_ascii=False, indent=2)
+                'error': redact_text(error) if error is not None else '',
+                'current_url': redact_url(str(getattr(driver, 'current_url', '') or '')),
+                'browser_log_summary': {
+                    'count': len(browser_logs),
+                    'levels': log_levels,
+                },
+                'raw_html_saved': False,
+                'screenshot_saved': _env_truthy("SGCC_ERROR_SCREENSHOT"),
+            })
+            meta_path = capture_dir / "meta.redacted.json"
+            meta_path.write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            meta_path.chmod(0o600)
+            if _env_truthy("SGCC_ERROR_SCREENSHOT"):
+                screenshot_path = capture_dir / "screenshot.png"
+                driver.save_screenshot(str(screenshot_path))
+                screenshot_path.chmod(0o600)
+                logging.warning(
+                    "SGCC_ERROR_SCREENSHOT 已开启；截图可能包含页面可见个人信息，请勿直接上传。"
+                )
+            self._prune()
             logging.error(f"已保存浏览器现场至 {capture_dir}")
-            return capture_dir
+            return str(capture_dir)
         except Exception as e:
-            logging.error(f"保存浏览器现场失败: {e}")
+            logging.error(f"保存浏览器现场失败: {redact_text(e)}")
             return None
 
-    def __handle_error(self, error, **options):
-        driver = options.get('driver', self.driver)
-        if not driver:
-            logging.error("未设置截图驱动。")
-            return
-
-        error_message = str(error)
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        screenshot_path = os.path.join(self.screenshot_dir, f'error_{timestamp}.png')
-
+    def _prune(self) -> None:
         try:
-            self.driver.save_screenshot(screenshot_path)
-            logging.error(f"发生错误: {error_message}。截图已保存至 {screenshot_path}")
-        except Exception as e:
-            logging.error(f"保存截图失败: {e}")
-            # 此处不抛出异常，避免掩盖原始错误
-        finally:
-            pass
+            keep = max(1, int(os.getenv("SGCC_ERROR_MAX_CAPTURES", "10")))
+        except (TypeError, ValueError):
+            keep = 10
+        captures = sorted(
+            (path for path in self.root_dir.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in captures[keep:]:
+            shutil.rmtree(path, ignore_errors=True)
+
+    def __handle_error(self, error, **options):
+        self.capture(type(error).__name__ or "error", error)

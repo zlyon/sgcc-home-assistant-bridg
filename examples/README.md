@@ -14,7 +14,7 @@
 
 ## 使用前需要替换
 
-把 YAML 里的 `4840` 替换为自己的户号后四位。
+示例中的实体 ID 是占位值。先在 Home Assistant 中确认实际 `sensor.sgcc_<末四位_稳定摘要>_*` 实体，再替换整段实体 ID。
 
 如果使用 `custom:sgcc-electricity-card`，需要把：
 
@@ -35,7 +35,7 @@ examples/custom-cards/sgcc-electricity-card.js
 已有 `state_grid` 仪表盘 YAML 时，建议使用：
 
 ```bash
-python tools/convert_state_grid_lovelace.py input.yaml output.yaml --suffix 4840
+python tools/convert_state_grid_lovelace.py input.yaml output.yaml --account-no 你的13位户号
 ```
 
 说明见 [migration/README.md](migration/README.md) 和 [../docs/state-grid-lovelace-migration.md](../docs/state-grid-lovelace-migration.md)。

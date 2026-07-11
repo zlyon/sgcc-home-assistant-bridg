@@ -76,3 +76,44 @@ def test_explicit_dom_balance_is_last_resort():
         observation(scope, "dom", [{"label": "您的账户余额", "value": "36.27元"}]),
     ])
     assert result.data.balance.balance_cny == 36.27
+
+
+def test_dom_historical_balance_is_rejected():
+    scope = CaptureScope.create("账户余额", ACCOUNT)
+    result = extract_account_data(scope, [
+        observation(scope, "dom", [{"label": "上月账户余额", "value": "86.44元"}]),
+    ])
+
+    assert result.data.balance is None
+
+
+def test_network_partial_balance_preserves_vue_complementary_fields():
+    scope = CaptureScope.create("账户余额", ACCOUNT)
+    vue = {
+        "state": {
+            "balance": {
+                "consNo": ACCOUNT,
+                "accountBalance": "80",
+                "prepayBal": "12",
+                "historyOwe": "3",
+            }
+        }
+    }
+    network = {
+        "result": {
+            "userAcc": {
+                "accountNo": ACCOUNT,
+                "queryTime": "2026-07-11 10:00:00",
+                "accountBalance": "88",
+            }
+        }
+    }
+
+    result = extract_account_data(scope, [
+        observation(scope, "vuex", vue),
+        observation(scope, "network", network),
+    ])
+
+    assert result.data.balance.balance_cny == 88
+    assert result.data.balance.prepay_balance_cny == 12
+    assert result.data.balance.arrears_cny == 3

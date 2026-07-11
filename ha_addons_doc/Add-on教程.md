@@ -154,8 +154,8 @@ MQTT Discovery 正常后，Home Assistant 会出现类似下面的设备：
 ### 抓取失败
 
 - 查看 Add-on 日志。
-- 需要反馈 issue 时，把 `SGCC_DEBUG` 临时设为 `true` 后重新运行一次，附上 `/data/debug/latest/sgcc-debug-bundle.zip`。
-- 查看 `/data/errors` 中的错误截图、HTML 和 metadata。
+- 需要反馈 issue 时，把 `SGCC_DEBUG` 临时设为 `true` 后重新运行一次，附上 `/data/debug/latest/sgcc-debug-bundle.zip`。Debug 目录权限为 `0700`，包和内部源文件权限为 `0600`。
+- 查看 `/data/errors` 中的 `meta.redacted.json`。该目录默认不保存原始 HTML 和截图，并只保留最近 10 次错误现场。
 - 如果出现 `RK001`，通常是 95598 / 腾讯验证码风控命中，本项目会停止本轮，避免反复打账号。
 - Add-on 和 Docker Compose 默认都使用 `SGCC_BROWSER_MODE=browser-service`。Add-on 内嵌官方 Google Chrome browser manager；Docker Compose 使用官方 Google Chrome sidecar。
 - 如果当前环境不适合新模式，可以把 `SGCC_BROWSER_MODE` 改成 `local` 回滚到 Debian Chromium + Xvfb。

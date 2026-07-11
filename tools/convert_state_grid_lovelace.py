@@ -8,25 +8,32 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-def sgcc_entities(suffix: str) -> dict[str, str]:
-    base = f"sensor.guo_wang_dian_fei_{suffix}"
+from sgcc_ha_bridge.entity_identity import account_entity_key
+
+
+def sgcc_entities(entity_key: str) -> dict[str, str]:
+    base = f"sensor.sgcc_{entity_key}"
     return {
-        "history": f"{base}_li_shi_shu_ju_{suffix}",
-        "balance": f"{base}_dian_fei_yu_e_{suffix}",
-        "arrears": f"{base}_ying_jiao_jin_e_{suffix}",
-        "prepay": f"{base}_yu_fu_fei_yu_e_{suffix}",
-        "latest_daily": f"{base}_zui_jin_ri_yong_dian_{suffix}",
-        "month_usage": f"{base}_yue_du_yong_dian_{suffix}",
-        "month_charge": f"{base}_yue_du_dian_fei_{suffix}",
-        "year_usage": f"{base}_nian_du_yong_dian_{suffix}",
-        "year_charge": f"{base}_nian_du_dian_fei_{suffix}",
-        "month_valley": f"{base}_yue_du_gu_shi_dian_liang_{suffix}",
-        "month_flat": f"{base}_yue_du_ping_shi_dian_liang_{suffix}",
-        "month_peak": f"{base}_yue_du_feng_shi_dian_liang_{suffix}",
-        "month_tip": f"{base}_yue_du_jian_shi_dian_liang_{suffix}",
+        "history": f"{base}_history",
+        "balance": f"{base}_balance",
+        "arrears": f"{base}_arrears",
+        "prepay": f"{base}_prepay_balance",
+        "latest_daily": f"{base}_last_daily_usage",
+        "month_usage": f"{base}_month_usage",
+        "month_charge": f"{base}_month_charge",
+        "year_usage": f"{base}_year_usage",
+        "year_charge": f"{base}_year_charge",
+        "month_valley": f"{base}_month_valley",
+        "month_flat": f"{base}_month_flat",
+        "month_peak": f"{base}_month_peak",
+        "month_tip": f"{base}_month_tip",
     }
 
 
@@ -77,8 +84,8 @@ def _replace_graph_access(line: str, graph_kind: str | None) -> str:
     return line
 
 
-def convert_text(text: str, account_suffix: str) -> tuple[str, dict[str, int]]:
-    entities = sgcc_entities(account_suffix)
+def convert_text(text: str, entity_key: str) -> tuple[str, dict[str, int]]:
+    entities = sgcc_entities(entity_key)
     counts: dict[str, int] = {"entity": 0, "daily_graph": 0, "monthly_graph": 0}
 
     graph_kind: str | None = None
@@ -113,12 +120,14 @@ def main() -> int:
     )
     parser.add_argument("input", help="输入 Lovelace YAML 文件，使用 - 表示 stdin")
     parser.add_argument("output", nargs="?", help="输出文件；不填则写 stdout")
-    parser.add_argument(
-        "--account-suffix",
-        "--suffix",
-        dest="account_suffix",
-        required=True,
-        help="本项目实体里的户号后四位，例如 4840",
+    identity = parser.add_mutually_exclusive_group(required=True)
+    identity.add_argument(
+        "--entity-key",
+        help="Home Assistant 实体中的账户键，例如 4840_0123456789",
+    )
+    identity.add_argument(
+        "--account-no",
+        help="完整 13 位户号；仅在本机计算账户键，不写入输出文件",
     )
     parser.add_argument("--output", "-o", dest="output_option", help="输出文件；不填则写 stdout")
     parser.add_argument("--quiet", action="store_true", help="不在 stderr 打印替换统计")
@@ -129,13 +138,12 @@ def main() -> int:
         parser.error("output positional and --output point to different files")
 
     if args.input == "-":
-        import sys
-
         src = sys.stdin.read()
     else:
         src = Path(args.input).read_text(encoding="utf-8")
 
-    out, counts = convert_text(src, args.account_suffix)
+    entity_key = args.entity_key or account_entity_key(args.account_no)
+    out, counts = convert_text(src, entity_key)
 
     if output:
         Path(output).write_text(out, encoding="utf-8")
@@ -143,8 +151,6 @@ def main() -> int:
         print(out, end="")
 
     if not args.quiet:
-        import sys
-
         print(
             f"converted entities={counts['entity']} daily_graph={counts['daily_graph']} monthly_graph={counts['monthly_graph']}",
             file=sys.stderr,

@@ -127,12 +127,39 @@ class NetworkRecorder:
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
 
-    def flush(self, timeout: float = 1.5) -> None:
-        """Wait briefly for already requested response bodies to arrive."""
+    def flush(self, timeout: float = 1.5, scope_id: Optional[str] = None) -> None:
+        """Wait briefly for requests and response bodies assigned to a scope.
+
+        The wait is bounded because SGCC pages may keep long-polling requests
+        open. Scope assignment remains the request-start scope.
+        """
         deadline = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < deadline:
             with self._lock:
-                pending = len(self._body_commands)
+                pending_scopes = [
+                    scope
+                    for scope in self._request_scopes.values()
+                    if scope_id is None or (scope is not None and scope.id == scope_id)
+                ]
+                response_scopes = [
+                    item.get("scope")
+                    for item in self._responses.values()
+                    if scope_id is None
+                    or (
+                        item.get("scope") is not None
+                        and item["scope"].id == scope_id
+                    )
+                ]
+                body_scopes = [
+                    item.get("scope")
+                    for item in self._body_commands.values()
+                    if scope_id is None
+                    or (
+                        item.get("scope") is not None
+                        and item["scope"].id == scope_id
+                    )
+                ]
+                pending = len(pending_scopes) + len(response_scopes) + len(body_scopes)
             if pending == 0:
                 return
             time.sleep(0.05)

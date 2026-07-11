@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import requests
 from .const import *
 from .cache_validity import has_useful_legacy_cache_entry
+from .entity_identity import account_entity_postfix, legacy_account_postfix
 
 
 def _mask_user_id(user_id) -> str:
@@ -24,6 +25,7 @@ class SensorUpdator:
             logging.warning("HASS_TOKEN 未配置，Home Assistant REST API 调用可能失败。")
         self.base_url = HASS_URL[:-1] if HASS_URL.endswith("/") else HASS_URL
         self.token = HASS_TOKEN or ""
+        self._legacy_entity_cleanup_done: set[str] = set()
         self._init_balance_notify()
 
     def _init_balance_notify(self):
@@ -75,7 +77,7 @@ class SensorUpdator:
         cache_values = dict(cache_values)
         cache_values.pop("user_id", None)
         self._save_to_cache(user_id, **cache_values)
-        postfix = f"_{user_id[-4:]}"
+        postfix = account_entity_postfix(user_id)
         publish_ok = True
 
         def record_publish_result(result) -> None:
@@ -87,7 +89,12 @@ class SensorUpdator:
 
         if balance is not None:
             if notify and self.balance_notify is not None:
-                self.balance_notify(user_id, balance)
+                try:
+                    self.balance_notify(user_id, balance)
+                except Exception as notify_error:
+                    logging.warning(
+                        f"[{_mask_user_id(user_id)}] 余额通知失败，已与国网抓取及 HA 发布隔离: {notify_error}"
+                    )
             record_publish_result(self.update_balance(postfix, balance, enhanced_balance))
         else:
             record_publish_result(self.delete_sensor_state(BALANCE_SENSOR_NAME + postfix))
@@ -116,10 +123,49 @@ class SensorUpdator:
             record_publish_result(self.delete_sensor_state(ARREARS_SENSOR_NAME + postfix))
 
         if publish_ok:
+            self._cleanup_legacy_entities(user_id)
             logging.info(f"[{_mask_user_id(user_id)}] Home Assistant 传感器数据更新完成!")
         else:
             logging.warning(f"[{_mask_user_id(user_id)}] Home Assistant 传感器数据未完全发布成功。")
         return publish_ok
+
+    def _cleanup_legacy_entities(self, user_id: str) -> None:
+        """Best-effort cleanup for entity IDs that used only the last four digits."""
+        if os.getenv("SGCC_CLEANUP_LEGACY_ENTITY_IDS", "").strip().lower() not in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return
+        cleaned = getattr(self, "_legacy_entity_cleanup_done", None)
+        if cleaned is None:
+            cleaned = set()
+            self._legacy_entity_cleanup_done = cleaned
+        if user_id in cleaned:
+            return
+        postfix = legacy_account_postfix(user_id)
+        for sensor_base in (
+            BALANCE_SENSOR_NAME,
+            DAILY_USAGE_SENSOR_NAME,
+            YEARLY_USAGE_SENSOR_NAME,
+            YEARLY_CHARGE_SENSOR_NAME,
+            MONTH_USAGE_SENSOR_NAME,
+            MONTH_CHARGE_SENSOR_NAME,
+            MONTH_VALLEY_SENSOR_NAME,
+            MONTH_FLAT_SENSOR_NAME,
+            MONTH_PEAK_SENSOR_NAME,
+            MONTH_TIP_SENSOR_NAME,
+            PREPAY_BALANCE_SENSOR_NAME,
+            ARREARS_SENSOR_NAME,
+        ):
+            try:
+                self.delete_sensor_state(sensor_base + postfix)
+            except Exception as cleanup_error:
+                logging.warning(
+                    f"[{_mask_user_id(user_id)}] 清理旧 Home Assistant 实体失败，已忽略: {cleanup_error}"
+                )
+        cleaned.add(user_id)
 
     def _get_cache_file(self):
         from .const import get_data_dir

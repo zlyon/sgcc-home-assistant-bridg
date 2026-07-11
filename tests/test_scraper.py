@@ -4,7 +4,7 @@ import sys
 import time
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 
 def _install_selenium_stub_if_missing():
@@ -75,6 +75,7 @@ def _install_selenium_stub_if_missing():
 _install_selenium_stub_if_missing()
 
 from sgcc_ha_bridge.model import Account, AccountData
+from sgcc_ha_bridge.observation import CaptureScope
 from sgcc_ha_bridge.scraper import AccountOption, Scraper
 
 
@@ -285,6 +286,46 @@ class DailyRangeWaitTestCase(unittest.TestCase):
 
 
 class SnapshotModeTestCase(unittest.TestCase):
+    def test_debug_full_snapshot_is_recorded_but_not_parsed(self):
+        class FakeDriver:
+            current_url = "https://95598.cn/osgweb/userAcc"
+
+        diagnostic = Mock()
+        scraper = Scraper(
+            driver=FakeDriver(),
+            diagnostic=diagnostic,
+            wait_seconds=1,
+            settle_seconds=0,
+        )
+        production = {"store": {}, "components": [], "url": FakeDriver.current_url}
+        debug_only = {
+            "store": {},
+            "components": [{
+                "data": {
+                    "unknownProvinceWrapper": {
+                        "consNo": "1234567890123",
+                        "accountBalance": "66.6",
+                    }
+                }
+            }],
+            "url": FakeDriver.current_url,
+        }
+        scraper._snapshot = Mock(side_effect=[production, debug_only])
+        scraper._dom_snapshot = Mock(return_value=[])
+
+        with patch.dict(os.environ, {"SGCC_DEBUG": "true"}):
+            data = scraper._parse_current_page(
+                "账户余额",
+                CaptureScope.create("账户余额", "1234567890123"),
+            )
+
+        self.assertIsNone(data.balance)
+        self.assertEqual(
+            scraper._snapshot.call_args_list,
+            [call(wide_debug=False), call(wide_debug=True)],
+        )
+        diagnostic.record_page.assert_called_once()
+
     def test_debug_readiness_probe_uses_light_snapshot(self):
         class FakeDriver:
             current_url = "https://95598.cn/osgweb/electricityCharge"
@@ -307,7 +348,7 @@ class SnapshotModeTestCase(unittest.TestCase):
         ):
             scraper._snapshot()
 
-        light.assert_called_once_with(scraper.driver, include_diag_fields=True)
+        light.assert_called_once_with(scraper.driver, include_diag_fields=False)
         wide.assert_not_called()
 
     def test_debug_parse_snapshot_uses_complete_bounded_component_data(self):

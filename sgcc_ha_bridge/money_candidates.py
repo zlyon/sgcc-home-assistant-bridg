@@ -2,7 +2,7 @@
 
 This module is observational: it does not change parser output and it does not
 scrape rendered DOM text. It inspects structured Vuex state/getters and Vue
-component data captured by the single SGCC_DIAG diagnostic flow.
+component data captured by the single SGCC_DEBUG diagnostic flow.
 """
 from __future__ import annotations
 
@@ -10,6 +10,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
+from .field_contracts import (
+    EXPLICIT_ARREARS_LABELS,
+    EXPLICIT_BALANCE_LABELS,
+    EXPLICIT_PREPAY_LABELS,
+    FIELD_CONTRACTS,
+)
 from .model import mask_account_no
 
 
@@ -21,18 +27,29 @@ _TIME_KEYS = ("amtTime", "queryTime", "date", "time", "dataTime", "updateTime", 
 _PERIOD_KEYS = ("billMonth", "month", "ym", "yearMonth", "queryYear", "year", "begDate", "beginDate", "endDate")
 _EXACT_NON_MONEY_KEYS = {key.casefold() for key in _ACCOUNT_KEYS + _TIME_KEYS + _PERIOD_KEYS}
 
-_PREPAY_TERMS = (
+def _contract_terms(category: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(
+        key.casefold()
+        for contract in FIELD_CONTRACTS
+        if contract.category == category
+        for key in contract.aliases
+    ))
+
+
+_PREPAY_TERMS = tuple(dict.fromkeys((
+    *_contract_terms("prepay_balance"),
+    *EXPLICIT_PREPAY_LABELS,
     "prepay", "prepaid", "prepayment", "advance", "预付", "预存", "预缴", "预交",
-)
-_ARREARS_TERMS = (
-    "historyowe", "arrears", "amountdue", "oweamt", "oweamount", "owefee",
-    "owebalance", "payable", "needpay", "欠费", "应交", "待缴", "待交",
-)
-_ACCOUNT_BALANCE_TERMS = (
-    "accountbalance", "accountbal", "acctbalance", "acctbal", "currentbalance", "curbalance",
-    "remainbalance", "remainingbalance", "surplusbalance", "userbalance", "availablebalance",
-    "账户余额", "电费余额", "当前余额", "账户结余",
-)
+)))
+_ARREARS_TERMS = tuple(dict.fromkeys((
+    *_contract_terms("arrears"),
+    *EXPLICIT_ARREARS_LABELS,
+    "payable", "needpay", "待交",
+)))
+_ACCOUNT_BALANCE_TERMS = tuple(dict.fromkeys((
+    *_contract_terms("account_balance"),
+    *EXPLICIT_BALANCE_LABELS,
+)))
 _PREVIOUS_TERMS = ("previous", "prev", "last", "lastmonth", "上期", "上月", "上次")
 _BILL_CHARGE_TERMS = (
     "monthelecost", "totalelecost", "monthamt", "totalamt", "billamt", "billamount",
@@ -264,7 +281,7 @@ def _looks_like_identifier_amount(key: str, value: Any) -> bool:
     key_text = key.casefold()
     if key_text in {k.casefold() for k in _ACCOUNT_KEYS}:
         return True
-    if re.fullmatch(r"\d{10,}", text):
+    if re.search(r"\d{10,}", text):
         return True
     return False
 

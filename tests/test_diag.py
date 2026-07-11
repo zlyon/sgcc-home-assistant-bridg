@@ -1,5 +1,6 @@
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -233,6 +234,10 @@ class DiagnosticCollectorTestCase(unittest.TestCase):
             self.assertNotIn("secret-token", observations)
             self.assertIn("unknown structured payload", decisions)
             self.assertTrue((latest / "sgcc-debug-bundle.zip").is_file())
+            self.assertEqual(stat.S_IMODE(Path(temp_dir).stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(latest.stat().st_mode), 0o700)
+            for path in latest.iterdir():
+                self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
     def test_record_observations_deduplicates_same_capture(self):
         collector = DiagnosticCollector(trigger_type="manual")
@@ -252,6 +257,8 @@ class DiagnosticCollectorTestCase(unittest.TestCase):
     def test_redaction_masks_unknown_numeric_identity_and_common_pii(self):
         payload = redact_structure({
             "unknownNumber": 1234567890123,
+            "largeNumericId": 250101123456789012301,
+            "embeddedAccountId": "prefix250101123456789012301suffix",
             "mysteryText": "110101199001011234",
             "contactValue": "person@example.com",
             "message": "failed at https://95598.cn/api/query?token=secret-token&accountNo=1234567890123",
@@ -259,11 +266,27 @@ class DiagnosticCollectorTestCase(unittest.TestCase):
 
         text = json.dumps(payload, ensure_ascii=False)
         self.assertNotIn("1234567890123", text)
+        self.assertNotIn("250101123456789012301", text)
         self.assertNotIn("110101199001011234", text)
         self.assertNotIn("person@example.com", text)
         self.assertNotIn("secret-token", text)
-        self.assertIn("<redacted-id>", text)
+        self.assertIn("<redacted-numeric-id>", text)
         self.assertIn("<redacted-email>", text)
+
+    def test_redaction_uses_label_context_for_generic_value_fields(self):
+        payload = redact_structure({
+            "rows": [
+                {"label": "用电地址", "value": "福建省福州市测试路 1 号"},
+                {"title": "客户姓名", "text": "张三"},
+                {"fieldName": "手机号", "fieldValue": "not-a-phone-shaped-value"},
+                {"label": "账户余额", "value": "86.44元"},
+            ]
+        })
+
+        self.assertEqual(payload["rows"][0]["value"], "<redacted>")
+        self.assertEqual(payload["rows"][1]["text"], "<redacted>")
+        self.assertEqual(payload["rows"][2]["fieldValue"], "<redacted>")
+        self.assertEqual(payload["rows"][3]["value"], "86.44元")
 
 
 if __name__ == "__main__":

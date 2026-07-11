@@ -22,11 +22,11 @@ entity: sensor.state_grid_123456_daily_ele_num
 entity: sensor.state_grid_123456_month_p_ele_num
 entity: sensor.state_grid_yearly_ele
 """
-        out, counts = module.convert_text(src, "4840")
-        self.assertIn("sensor.guo_wang_dian_fei_4840_dian_fei_yu_e_4840", out)
-        self.assertIn("sensor.guo_wang_dian_fei_4840_zui_jin_ri_yong_dian_4840", out)
-        self.assertIn("sensor.guo_wang_dian_fei_4840_yue_du_feng_shi_dian_liang_4840", out)
-        self.assertIn("sensor.guo_wang_dian_fei_4840_nian_du_yong_dian_4840", out)
+        out, counts = module.convert_text(src, "4840_0123456789")
+        self.assertIn("sensor.sgcc_4840_0123456789_balance", out)
+        self.assertIn("sensor.sgcc_4840_0123456789_last_daily_usage", out)
+        self.assertIn("sensor.sgcc_4840_0123456789_month_peak", out)
+        self.assertIn("sensor.sgcc_4840_0123456789_year_usage", out)
         self.assertEqual(counts["entity"], 4)
 
     def test_replaces_graph_attribute_by_series_context(self):
@@ -39,14 +39,14 @@ series:
     data_generator: |
       return entity.attributes["graph"];
 """
-        out, counts = module.convert_text(src, "4840")
-        self.assertEqual(out.count("sensor.guo_wang_dian_fei_4840_li_shi_shu_ju_4840"), 2)
+        out, counts = module.convert_text(src, "4840_0123456789")
+        self.assertEqual(out.count("sensor.sgcc_4840_0123456789_history"), 2)
         self.assertIn("entity.attributes.daily", out)
         self.assertIn('entity.attributes["monthly"]', out)
         self.assertEqual(counts["daily_graph"], 1)
         self.assertEqual(counts["monthly_graph"], 1)
 
-    def test_cli_accepts_suffix_alias_and_output_positional(self):
+    def test_cli_accepts_account_number_and_output_positional(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.yaml"
             dst = Path(tmp) / "output.yaml"
@@ -58,8 +58,8 @@ series:
                     str(ROOT / "tools" / "convert_state_grid_lovelace.py"),
                     str(src),
                     str(dst),
-                    "--suffix",
-                    "4840",
+                    "--account-no",
+                    "1234567890123",
                     "--quiet",
                 ],
                 check=True,
@@ -69,9 +69,20 @@ series:
 
             self.assertEqual(result.stderr, "")
             self.assertIn(
-                "sensor.guo_wang_dian_fei_4840_dian_fei_yu_e_4840",
+                "sensor.sgcc_0123_e2161a7e19_balance",
                 dst.read_text(encoding="utf-8"),
             )
+
+    def test_shipped_lovelace_examples_use_current_entity_identity(self):
+        example_files = [
+            ROOT / "examples/basic/lovelace-sgcc-electricity.yaml",
+            *sorted((ROOT / "examples/lovelace-cards").glob("*.yaml")),
+        ]
+
+        for path in example_files:
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("sensor.guo_wang_dian_fei_4840", text, path)
+            self.assertIn("sensor.sgcc_4840_0123456789_", text, path)
 
 
 if __name__ == "__main__":

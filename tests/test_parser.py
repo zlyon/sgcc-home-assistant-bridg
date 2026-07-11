@@ -517,6 +517,95 @@ class ParserTestCase(unittest.TestCase):
         with self.assertRaises(ValueError):
             merge_account_data(first, second)
 
+    def test_merge_account_data_coalesces_complementary_period_fields(self):
+        first = parse_account_data(
+            components=[{"data": {
+                "selectValue": "1234567890123",
+                "tableData": [
+                    {"month": "202607", "monthEleNum": "10"},
+                    {"day": "2026-07-10", "dayElePq": "5"},
+                ],
+            }}]
+        )
+        second = parse_account_data(
+            components=[{"data": {
+                "selectValue": "1234567890123",
+                "tableData": [
+                    {"month": "202607", "monthEleCost": "22.5"},
+                    {
+                        "day": "2026-07-10",
+                        "thisVPq": "1",
+                        "thisNPq": "2",
+                        "thisPPq": "2",
+                    },
+                ],
+            }}]
+        )
+
+        merged = merge_account_data(first, second)
+
+        self.assertEqual(merged.monthly[0].total_usage_kwh, 10)
+        self.assertEqual(merged.monthly[0].total_charge_cny, 22.5)
+        self.assertEqual(merged.daily[0].total_usage_kwh, 5)
+        self.assertEqual(merged.daily[0].valley_usage_kwh, 1)
+        self.assertEqual(merged.daily[0].flat_usage_kwh, 2)
+        self.assertEqual(merged.daily[0].peak_usage_kwh, 2)
+
+    def test_duplicate_rows_in_one_snapshot_coalesce_fields(self):
+        data = parse_account_data(
+            components=[{"data": {
+                "selectValue": "1234567890123",
+                "tableData": [
+                    {"month": "202607", "monthEleNum": "0"},
+                    {"month": "202607", "monthEleCost": "0"},
+                    {"day": "2026-07-10", "dayElePq": "5"},
+                    {"day": "2026-07-10", "thisVPq": "1", "thisNPq": "2"},
+                ],
+            }}]
+        )
+
+        self.assertEqual(len(data.monthly), 1)
+        self.assertEqual(data.monthly[0].total_usage_kwh, 0)
+        self.assertEqual(data.monthly[0].total_charge_cny, 0)
+        self.assertEqual(len(data.daily), 1)
+        self.assertEqual(data.daily[0].total_usage_kwh, 5)
+        self.assertEqual(data.daily[0].valley_usage_kwh, 1)
+        self.assertEqual(data.daily[0].flat_usage_kwh, 2)
+
+    def test_bill_detail_only_fills_fields_missing_from_primary_usage_data(self):
+        data = parse_account_data(
+            components=[{"data": {
+                "selectValue": "1234567890123",
+                "powerData": {
+                    "dataInfo": {
+                        "year": "2026",
+                        "totalEleNum": "100",
+                    },
+                    "mothEleList": [
+                        {
+                            "month": "202607",
+                            "monthEleNum": "10",
+                        }
+                    ],
+                },
+                "billData": {
+                    "ym": "202607",
+                    "basicInfo": {
+                        "year": "2026",
+                        "monthPq": "999",
+                        "monthAmt": "22.5",
+                        "yearPq": "9999",
+                        "yearAmt": "88.5",
+                    },
+                },
+            }}]
+        )
+
+        self.assertEqual(data.monthly[0].total_usage_kwh, 10)
+        self.assertEqual(data.monthly[0].total_charge_cny, 22.5)
+        self.assertEqual(data.yearly.total_usage_kwh, 100)
+        self.assertEqual(data.yearly.total_charge_cny, 88.5)
+
 
 if __name__ == "__main__":
     unittest.main()

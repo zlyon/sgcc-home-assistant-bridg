@@ -5,6 +5,15 @@ from datetime import datetime
 from .model import mask_account_no
 
 
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(password|passwd|pwd|token|secret|cookie|authorization|api[_-]?key)"
+    r"(\s*[:=]\s*)([^,\r\n]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+_ACCOUNT_RE = re.compile(r"(?<!\d)(\d{13})(?!\d)")
+_LONG_NUMERIC_ID_RE = re.compile(r"\d{13,}")
+
+
 class AccountNoRedactionFilter(logging.Filter):
     def filter(self, record):
         try:
@@ -43,7 +52,13 @@ def mask_secret(value: str, keep_last: int = 2) -> str:
 
 def redact_text(value) -> str:
     text = str(value)
-    return re.sub(r"(?<!\d)(\d{13})(?!\d)", lambda m: mask_account_no(m.group(1)), text)
+    text = _BEARER_RE.sub("Bearer <redacted>", text)
+    text = _SECRET_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}<redacted>",
+        text,
+    )
+    text = _ACCOUNT_RE.sub(lambda match: mask_account_no(match.group(1)), text)
+    return _LONG_NUMERIC_ID_RE.sub("<redacted-numeric-id>", text)
 
 
 def redact_url(url: str) -> str:

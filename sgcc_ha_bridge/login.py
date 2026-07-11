@@ -13,7 +13,7 @@ from selenium.common.exceptions import TimeoutException
 from .captcha_selenium import solve_captcha_in_browser
 from .login_guard import LoginFailure, classify_login_failure
 from .config import FetcherConfig
-from .const import LOGIN_URL
+from .const import LOGIN_URL, get_data_dir
 from .error_watcher import ErrorWatcher
 from .redact import mask_secret
 
@@ -279,28 +279,42 @@ class SgccLogin:
           logging.info('二维码图片源不是 base64 格式')
           img_screenshot = qrElement.screenshot_as_png
 
-        with open("/data/login_qr_code.png", "wb") as f:
+        qr_path = os.path.join(get_data_dir(), "login_qr_code.png")
+        with open(qr_path, "wb") as f:
             f.write(img_screenshot)
-            logging.info("已将二维码保存到 /data/login_qr_code.png")
+        try:
+            os.chmod(qr_path, 0o600)
+        except OSError:
+            pass
+        logging.info(f"已临时保存登录二维码到 {qr_path}")
 
-        from .notify import UrlLoginQrCodeNotify
-        notifyFunc = UrlLoginQrCodeNotify()
-        notifyFunc(img_screenshot, reason)
-        for i in range(1, self.config.QR_CODE_LOGIN_WAIT_COUNT + 1):
-            logging.info(f'二维码登录等待检查[{self.config.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT}] 次数[{i}]')
-            time.sleep(self.config.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT)
-            if (driver.current_url != LOGIN_URL):
-                logging.info("二维码登录成功")
-                return True
-            else:
+        try:
+            from .notify import UrlLoginQrCodeNotify
+            try:
+                UrlLoginQrCodeNotify()(img_screenshot, reason)
+            except Exception as notify_error:
+                logging.warning(f"二维码通知失败，继续等待本地扫码: {notify_error}")
+            for i in range(1, self.config.QR_CODE_LOGIN_WAIT_COUNT + 1):
+                logging.info(f'二维码登录等待检查[{self.config.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT}] 次数[{i}]')
+                time.sleep(self.config.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT)
+                if (driver.current_url != LOGIN_URL):
+                    logging.info("二维码登录成功")
+                    return True
                 error = self._get_error_message(driver, "//div[@class='sweepCodePic']//div[@class='erwBg']//p")
                 if error is not None:
                     logging.error(f'二维码登录错误[{error}]')
                     return False
 
-        logging.warning("二维码登录超时")
-
-        return False
+            logging.warning("二维码登录超时")
+            return False
+        finally:
+            try:
+                os.remove(qr_path)
+                logging.info("登录二维码临时文件已删除。")
+            except FileNotFoundError:
+                pass
+            except OSError as cleanup_error:
+                logging.warning(f"删除登录二维码临时文件失败: {cleanup_error}")
 
     def _random_delay(self, min_seconds=0.5, max_seconds=3.0):
         """添加随机延迟，使自动化操作更难被检测。"""

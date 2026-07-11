@@ -10,77 +10,24 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
+from .field_contracts import (
+    EXPLICIT_ARREARS_LABELS,
+    EXPLICIT_BALANCE_LABELS,
+    EXPLICIT_PREPAY_LABELS,
+    HISTORICAL_BALANCE_LABEL_TERMS,
+    field_keys,
+)
 from .model import Account, AccountData, Balance, DailyReading, MonthlyReading, YearlyReading
 
 
 _MASKED_ACCOUNT_RE = re.compile(r"\*+(\d{4})$")
 
-_BALANCE_KEYS = (
-    # Confirmed structured current-balance fields. Keep this list small: new
-    # aliases should come from SGCC_DIAG evidence, not guesses.
-    "accountBalance",
-)
-_LEGACY_BALANCE_ALIAS_KEYS = (
-    # Quarantined compatibility aliases from older releases.  They are only
-    # accepted from the same dict as account/time context, never by merging the
-    # whole Vue tree.  This keeps plausible old guesses working without making
-    # every money-like field a first-class parser contract.
-    "accountBal",
-    "accountBalanceAmt",
-    "acctBal",
-    "acctBalance",
-    "acctBalanceAmt",
-    "balanceAmt",
-    "availableBalance",
-    "availableBal",
-    "currentBalance",
-    "curBalance",
-    "remainBalance",
-    "remainingBalance",
-    "surplusBalance",
-    "surplusAmt",
-    "userBalance",
-    "账户余额",
-    "电费余额",
-    "当前余额",
-    "账户结余",
-    "结余金额",
-)
-_PREPAY_BALANCE_KEYS = (
-    "prepayBal",
-    "prepayBalance",
-)
-_LEGACY_PREPAY_BALANCE_ALIAS_KEYS = (
-    "prepay_balance",
-    "prepayAmt",
-    "prepaidBalance",
-    "prepaidBal",
-    "prepaidAmt",
-    "prepaymentBalance",
-    "advanceBalance",
-    "advanceAmt",
-    "预付费余额",
-    "预存余额",
-    "预存电费",
-)
-_ARREARS_KEYS = (
-    "historyOwe",
-)
-_LEGACY_ARREARS_ALIAS_KEYS = (
-    "arrears",
-    "amountDue",
-    "oweAmt",
-    "oweAmount",
-    "oweFee",
-    "oweBalance",
-    "payableAmt",
-    "needPayAmt",
-    "totalOwe",
-    "欠费",
-    "欠费金额",
-    "应交金额",
-    "待缴金额",
-)
+_BALANCE_KEYS = field_keys("account_balance", "confirmed")
+_LEGACY_BALANCE_ALIAS_KEYS = field_keys("account_balance", "legacy")
+_PREPAY_BALANCE_KEYS = field_keys("prepay_balance", "confirmed")
+_LEGACY_PREPAY_BALANCE_ALIAS_KEYS = field_keys("prepay_balance", "legacy")
+_ARREARS_KEYS = field_keys("arrears", "confirmed")
+_LEGACY_ARREARS_ALIAS_KEYS = field_keys("arrears", "legacy")
 _BALANCE_TIME_KEYS = ("amtTime", "queryTime")
 _LABEL_KEYS = ("label",)
 _VALUE_KEYS = ("value",)
@@ -97,20 +44,10 @@ _ACCOUNT_DESCRIPTION_KEYS = (
     "consName",
 )
 
-_EXPLICIT_ACCOUNT_BALANCE_LABELS = ("账户余额",)
-_EXPLICIT_PREPAY_BALANCE_LABELS = ("预付费余额",)
-_EXPLICIT_ARREARS_LABELS = ("应交金额",)
-_HISTORICAL_BALANCE_LABEL_TERMS = (
-    "上月",
-    "上期",
-    "上次",
-    "期初",
-    "上年",
-    "去年",
-    "previous",
-    "prev",
-    "last",
-)
+_EXPLICIT_ACCOUNT_BALANCE_LABELS = EXPLICIT_BALANCE_LABELS
+_EXPLICIT_PREPAY_BALANCE_LABELS = EXPLICIT_PREPAY_LABELS
+_EXPLICIT_ARREARS_LABELS = EXPLICIT_ARREARS_LABELS
+_HISTORICAL_BALANCE_LABEL_TERMS = HISTORICAL_BALANCE_LABEL_TERMS
 
 _DIRECT_AMOUNT_KEYS = _BALANCE_KEYS + _PREPAY_BALANCE_KEYS + _ARREARS_KEYS
 
@@ -154,14 +91,13 @@ def parse_account_data(
     monthly = _parse_monthly(values, power_obj, account_no)
     daily = _parse_daily(values, account_no)
 
-    # Bill detail can fill a month when powerData/tableData is absent.
+    # Bill detail can fill fields omitted by powerData/tableData.
     bill_month = _parse_bill_month(values, account_no)
-    if bill_month and all(row.year_month != bill_month.year_month for row in monthly):
-        monthly.append(bill_month)
-    if not yearly:
-        bill_yearly = _parse_bill_yearly(values, account_no)
-        if bill_yearly:
-            yearly = bill_yearly
+    if bill_month:
+        monthly = _merge_by_key([bill_month], monthly, lambda x: x.year_month)
+    bill_yearly = _parse_bill_yearly(values, account_no)
+    if bill_yearly:
+        yearly = _merge_yearly(bill_yearly, yearly)
 
     return AccountData(account=account, balance=balance, yearly=yearly, monthly=monthly, daily=daily)
 
@@ -193,8 +129,8 @@ def merge_account_data(*items: AccountData) -> AccountData:
         if item.account.province and not account.province:
             account = replace(account, province=item.account.province)
 
-        balance = item.balance or result.balance
-        yearly = item.yearly or result.yearly
+        balance = _merge_balance(result.balance, item.balance)
+        yearly = _merge_yearly(result.yearly, item.yearly)
         monthly = _merge_by_key(result.monthly, item.monthly, lambda x: x.year_month)
         daily = _merge_by_key(result.daily, item.daily, lambda x: x.date)
         if account.account_no:
@@ -483,7 +419,7 @@ def _balance_values_from_label_rows(rows: list[Any]) -> dict[str, Any]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        for key, value in _balance_values_from_label_row(row).items():
+        for key, value in balance_values_from_explicit_label_row(row).items():
             selected.setdefault(key, value)
     # Label rows are only a narrow fallback for one explicit current-balance
     # list. Prepay/arrears labels may supplement that list, not create one.
@@ -492,7 +428,7 @@ def _balance_values_from_label_rows(rows: list[Any]) -> dict[str, Any]:
     return selected
 
 
-def _balance_values_from_label_row(raw: dict[str, Any]) -> dict[str, Any]:
+def balance_values_from_explicit_label_row(raw: dict[str, Any]) -> dict[str, Any]:
     """Parse only explicit, debug-confirmed balance labels.
 
     Do not treat generic "余额/结余" as current balance. Historical labels such
@@ -512,7 +448,6 @@ def _balance_values_from_label_row(raw: dict[str, Any]) -> dict[str, Any]:
     if _label_matches(label, _EXPLICIT_ACCOUNT_BALANCE_LABELS):
         return {"accountBalance": value}
     return {}
-
 
 def _is_historical_balance_label(label: str) -> bool:
     folded = str(label).casefold()
@@ -549,29 +484,25 @@ def _parse_monthly(values: list[Any], power_obj: dict[str, Any], account_no: str
             if any("monthEleNum" in x or "monthEleCost" in x for x in value if isinstance(x, dict)):
                 rows.extend(value)
 
-    result: list[MonthlyReading] = []
-    seen: set[str] = set()
+    result_by_month: dict[str, MonthlyReading] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
-        ym = _normalize_ym(row.get("month") or row.get("ym") or row.get("billMonth"))
-        usage = _safe_float(row.get("monthEleNum") or row.get("monthPq"))
-        charge = _safe_float(row.get("monthEleCost") or row.get("monthAmt"))
+        ym = _normalize_ym(_pick_first_value(row, "month", "ym", "billMonth"))
+        usage = _safe_float(_pick_first_value(row, "monthEleNum", "monthPq"))
+        charge = _safe_float(_pick_first_value(row, "monthEleCost", "monthAmt"))
         if not ym or (usage is None and charge is None):
             continue
-        if ym in seen:
-            continue
-        seen.add(ym)
-        result.append(MonthlyReading(
+        reading = MonthlyReading(
             account_no=account_no,
             year_month=ym,
             total_usage_kwh=usage,
             total_charge_cny=charge,
-            begin_date=_date_only(row.get("begDate") or row.get("beginDate")),
+            begin_date=_date_only(_pick_first_value(row, "begDate", "beginDate")),
             end_date=_date_only(row.get("endDate")),
-        ))
-    result.sort(key=lambda x: x.year_month)
-    return result
+        )
+        result_by_month[ym] = _merge_monthly(result_by_month.get(ym), reading)
+    return [result_by_month[key] for key in sorted(result_by_month)]
 
 
 def _parse_daily(values: list[Any], account_no: str) -> list[DailyReading]:
@@ -581,8 +512,7 @@ def _parse_daily(values: list[Any], account_no: str) -> list[DailyReading]:
             if any("dayElePq" in x or "thisVPq" in x for x in value if isinstance(x, dict)):
                 rows.extend(value)
 
-    result: list[DailyReading] = []
-    seen: set[str] = set()
+    result_by_date: dict[str, DailyReading] = {}
     current_year = str(datetime.now().year)
     for row in rows:
         if not isinstance(row, dict):
@@ -595,10 +525,7 @@ def _parse_daily(values: list[Any], account_no: str) -> list[DailyReading]:
         tip = _safe_float(row.get("thisTPq"))
         if not date or (usage is None and valley is None and flat is None and peak is None and tip is None):
             continue
-        if date in seen:
-            continue
-        seen.add(date)
-        result.append(DailyReading(
+        reading = DailyReading(
             account_no=account_no,
             date=date,
             total_usage_kwh=usage,
@@ -606,9 +533,9 @@ def _parse_daily(values: list[Any], account_no: str) -> list[DailyReading]:
             flat_usage_kwh=flat,
             peak_usage_kwh=peak,
             tip_usage_kwh=tip,
-        ))
-    result.sort(key=lambda x: x.date)
-    return result
+        )
+        result_by_date[date] = _merge_daily(result_by_date.get(date), reading)
+    return [result_by_date[key] for key in sorted(result_by_date)]
 
 
 def _parse_bill_month(values: list[Any], account_no: str) -> Optional[MonthlyReading]:
@@ -743,12 +670,91 @@ def _date_only(value: Any) -> Optional[str]:
     return text[:10] if text else None
 
 
+def _prefer(current: Any, incoming: Any) -> Any:
+    return incoming if incoming is not None else current
+
+
+def _prefer_text(current: str, incoming: str) -> str:
+    return incoming if str(incoming or "").strip() else current
+
+
+def _merge_balance(current: Optional[Balance], incoming: Optional[Balance]) -> Optional[Balance]:
+    if current is None:
+        return incoming
+    if incoming is None:
+        return current
+    return Balance(
+        account_no=_prefer_text(current.account_no, incoming.account_no),
+        observed_at=_prefer_text(current.observed_at, incoming.observed_at),
+        balance_cny=_prefer(current.balance_cny, incoming.balance_cny),
+        prepay_balance_cny=_prefer(current.prepay_balance_cny, incoming.prepay_balance_cny),
+        arrears_cny=_prefer(current.arrears_cny, incoming.arrears_cny),
+    )
+
+
+def _merge_yearly(
+    current: Optional[YearlyReading],
+    incoming: Optional[YearlyReading],
+) -> Optional[YearlyReading]:
+    if current is None:
+        return incoming
+    if incoming is None:
+        return current
+    if current.year and incoming.year and current.year != incoming.year:
+        return incoming if incoming.year > current.year else current
+    return YearlyReading(
+        account_no=_prefer_text(current.account_no, incoming.account_no),
+        year=_prefer_text(current.year, incoming.year),
+        total_usage_kwh=_prefer(current.total_usage_kwh, incoming.total_usage_kwh),
+        total_charge_cny=_prefer(current.total_charge_cny, incoming.total_charge_cny),
+    )
+
+
+def _merge_monthly(
+    current: Optional[MonthlyReading],
+    incoming: MonthlyReading,
+) -> MonthlyReading:
+    if current is None:
+        return incoming
+    return MonthlyReading(
+        account_no=_prefer_text(current.account_no, incoming.account_no),
+        year_month=_prefer_text(current.year_month, incoming.year_month),
+        total_usage_kwh=_prefer(current.total_usage_kwh, incoming.total_usage_kwh),
+        total_charge_cny=_prefer(current.total_charge_cny, incoming.total_charge_cny),
+        begin_date=_prefer(current.begin_date, incoming.begin_date),
+        end_date=_prefer(current.end_date, incoming.end_date),
+    )
+
+
+def _merge_daily(
+    current: Optional[DailyReading],
+    incoming: DailyReading,
+) -> DailyReading:
+    if current is None:
+        return incoming
+    return DailyReading(
+        account_no=_prefer_text(current.account_no, incoming.account_no),
+        date=_prefer_text(current.date, incoming.date),
+        total_usage_kwh=_prefer(current.total_usage_kwh, incoming.total_usage_kwh),
+        valley_usage_kwh=_prefer(current.valley_usage_kwh, incoming.valley_usage_kwh),
+        flat_usage_kwh=_prefer(current.flat_usage_kwh, incoming.flat_usage_kwh),
+        peak_usage_kwh=_prefer(current.peak_usage_kwh, incoming.peak_usage_kwh),
+        tip_usage_kwh=_prefer(current.tip_usage_kwh, incoming.tip_usage_kwh),
+    )
+
+
 def _merge_by_key(old: list[Any], new: list[Any], key_func) -> list[Any]:
     merged = {key_func(item): item for item in old if key_func(item)}
     for item in new:
         key = key_func(item)
         if key:
-            merged[key] = item
+            current = merged.get(key)
+            if isinstance(item, MonthlyReading):
+                merged[key] = _merge_monthly(current, item)
+            elif isinstance(item, DailyReading):
+                merged[key] = _merge_daily(current, item)
+            else:
+                merged[key] = item
     return [merged[key] for key in sorted(merged)]
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .field_contracts import parser_capture_keys
 
 CORE_WANTED_KEYS = (
     "mixinGetYuEdata",
@@ -38,52 +39,7 @@ CORE_WANTED_KEYS = (
     "listData",
 )
 
-PARSER_MONEY_KEYS = (
-    # parser 当前明确支持或受限兼容的字段，默认采集以保持旧兼容可用。
-    "accountBalance",
-    "accountBal",
-    "accountBalanceAmt",
-    "acctBal",
-    "acctBalance",
-    "acctBalanceAmt",
-    "balanceAmt",
-    "availableBalance",
-    "availableBal",
-    "currentBalance",
-    "curBalance",
-    "remainBalance",
-    "remainingBalance",
-    "surplusBalance",
-    "surplusAmt",
-    "userBalance",
-    "prepayBal",
-    "prepayBalance",
-    "prepay_balance",
-    "prepayAmt",
-    "prepaidBalance",
-    "prepaidBal",
-    "prepaidAmt",
-    "prepaymentBalance",
-    "advanceBalance",
-    "advanceAmt",
-    "historyOwe",
-    "arrears",
-    "amountDue",
-    "oweAmt",
-    "oweAmount",
-    "oweFee",
-    "oweBalance",
-    "payableAmt",
-    "needPayAmt",
-    "totalOwe",
-    "sumMoney",
-    "estiAmt",
-    "queryTime",
-    "amtTime",
-    "accountNo",
-    "acctNo",
-    "address",
-)
+PARSER_MONEY_KEYS = parser_capture_keys()
 
 DIAG_ONLY_MONEY_KEYS = (
     # 泛字段只供 SGCC_DIAG 取证；parser 默认不把它们当余额。

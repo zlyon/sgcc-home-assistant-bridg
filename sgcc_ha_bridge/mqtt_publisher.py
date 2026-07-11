@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from .cache_validity import has_useful_account_data
 from .config import FetcherConfig
+from .entity_identity import account_entity_key
 from .model import AccountData, DailyReading, MonthlyReading, mask_account_no
 
 try:
@@ -25,6 +26,7 @@ class MqttPublisher:
         self.discovery_prefix = self.config.MQTT_DISCOVERY_PREFIX or "homeassistant"
         self.client = None
         self.connected = False
+        self._legacy_cleanup_done: set[str] = set()
 
     def __enter__(self):
         self.connect()
@@ -80,19 +82,19 @@ class MqttPublisher:
         try:
             account_no = account_data.account.account_no
             masked = mask_account_no(account_no)
+            entity_key = account_entity_key(account_no)
             if not has_useful_account_data(account_data):
                 logging.warning(f"MQTT 发布跳过户号 {masked}: 当前 AccountData 没有有效国网业务数据。")
                 return False
-            node = self._safe_topic_part(f"sgcc_{masked}")
+            node = self._safe_topic_part(f"sgcc_{entity_key}")
             device = {
-                "identifiers": [f"sgcc_{masked}"],
+                "identifiers": [f"sgcc_{entity_key}"],
                 "name": f"国网电费 {masked}",
                 "manufacturer": "SGCC bridge",
             }
 
             published_configs = 0
             published_states = 0
-            suffix = account_no[-4:] if account_no else self._safe_topic_part(masked)[-4:]
             for spec in self._sensor_specs(account_data, masked, device):
                 value = spec.pop("value")
                 key = spec.pop("key")
@@ -116,8 +118,8 @@ class MqttPublisher:
                 attributes = spec.pop("attributes", None)
                 payload = {
                     "name": spec.pop("name"),
-                    "unique_id": f"sgcc_{masked}_{key}",
-                    "object_id": f"sgcc_{suffix}_{key}",
+                    "unique_id": f"sgcc_{entity_key}_{key}",
+                    "object_id": f"sgcc_{entity_key}_{key}",
                     "state_topic": state_topic,
                     "device": device,
                 }
@@ -136,7 +138,15 @@ class MqttPublisher:
                 published_states += 1
             if published_configs and not published_states:
                 logging.warning("MQTT Discovery 配置已发布，但当前账户数据没有可用状态值；本次 MQTT 发布不视为成功。")
-            return published_configs > 0 and published_states > 0
+            success = published_configs > 0 and published_states > 0
+            if success:
+                try:
+                    self._cleanup_legacy_discovery(account_data, masked)
+                except Exception as cleanup_error:
+                    logging.warning(
+                        f"MQTT 新实体已发布，旧版 Discovery 清理失败，保留旧实体等待下次重试: {cleanup_error}"
+                    )
+            return success
         except Exception as e:
             logging.warning(f"MQTT 发布失败: {e}")
             return False
@@ -152,9 +162,10 @@ class MqttPublisher:
             return False
         try:
             masked = mask_account_no(account_no)
-            node = self._safe_topic_part(f"sgcc_{masked}")
+            entity_key = account_entity_key(account_no)
+            node = self._safe_topic_part(f"sgcc_{entity_key}")
             device = {
-                "identifiers": [f"sgcc_{masked}"],
+                "identifiers": [f"sgcc_{entity_key}"],
                 "name": f"国网电费 {masked}",
                 "manufacturer": "SGCC bridge",
             }
@@ -166,11 +177,34 @@ class MqttPublisher:
             for key in keys:
                 config_topic = f"{self.discovery_prefix}/sensor/{node}/{key}/config"
                 self._publish(config_topic, "", retain=True)
+                legacy_node = self._safe_topic_part(f"sgcc_{masked}")
+                legacy_topic = f"{self.discovery_prefix}/sensor/{legacy_node}/{key}/config"
+                self._publish(legacy_topic, "", retain=True)
             logging.info(f"MQTT 已清理失效户号 {masked} 的 {len(keys)} 个 Discovery 配置。")
             return bool(keys)
         except Exception as e:
             logging.warning(f"MQTT 账户 Discovery 清理失败: {e}")
             return False
+
+    def _cleanup_legacy_discovery(self, account_data: AccountData, masked: str) -> None:
+        account_no = account_data.account.account_no
+        if account_no in self._legacy_cleanup_done:
+            return
+        legacy_node = self._safe_topic_part(f"sgcc_{masked}")
+        legacy_device = {
+            "identifiers": [f"sgcc_{masked}"],
+            "name": f"国网电费 {masked}",
+            "manufacturer": "SGCC bridge",
+        }
+        keys = {
+            str(spec.get("key") or "")
+            for spec in self._sensor_specs(account_data, masked, legacy_device)
+            if spec.get("key")
+        }
+        for key in sorted(keys):
+            topic = f"{self.discovery_prefix}/sensor/{legacy_node}/{key}/config"
+            self._publish(topic, "", retain=True)
+        self._legacy_cleanup_done.add(account_no)
 
     def _publish(self, topic: str, payload: Any, retain: bool = False) -> None:
         result = self.client.publish(topic, payload=payload, retain=retain)

@@ -189,7 +189,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 - 已在 HAOS 18.0 / Supervisor 2026.06.2 上验证仓库添加、识别、安装和启动；真实国网登录、LLM 验证码和 MQTT 发布仍建议按自己的账号环境跑一轮。
 - 安装完成后进入 “配置 / Configuration”。
 - 填写国家电网账号密码、MQTT、LLM 验证码接口；只有使用 `rest`/`both` 时才需要 REST 相关配置。
-- 推荐使用 `PUBLISHER=mqtt`；只有需要兼容旧仪表盘或自动化时才使用 `PUBLISHER=both`。
+- 推荐使用 `PUBLISHER=mqtt`；需要同时发布 HA REST state 时使用 `PUBLISHER=both`。
 - 保存后在 “信息 / Info” 中启动。
 - 失败时查看日志和 `/data/errors`。
 
@@ -214,7 +214,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `LLM_BASE_URL` | OpenAI 兼容接口 Base URL；也兼容 `ARK_BASE_URL`。 |
 | `LLM_MODEL` | 多模态模型名或接入点 ID；也兼容 `ARK_MODEL`。 |
 | `LOGIN_FALLBACK` | 登录失败兜底方式；`qrcode` 表示二维码人工扫码，默认只建议手动任务使用。 |
-| `PUBLISHER` | 发布方式：`mqtt`、`rest`、`both`；推荐 `mqtt`。`both` 会额外生成旧 REST 兼容实体。 |
+| `PUBLISHER` | 发布方式：`mqtt`、`rest`、`both`；推荐 `mqtt`。`both` 会同时发布 MQTT Discovery 和 HA REST state。 |
 | `MQTT_HOST` | MQTT broker 地址。 |
 | `MQTT_PORT` | MQTT broker 端口。 |
 | `MQTT_USERNAME` | MQTT 用户名，可留空。 |
@@ -222,11 +222,15 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `MQTT_DISCOVERY_PREFIX` | Home Assistant MQTT Discovery 前缀，默认 `homeassistant`。 |
 | `SGCC_DB_PATH` | SQLite 数据库路径，默认 `/data/sgcc.sqlite3`。 |
 | `SCRAPER_SETTLE_SECONDS` | Path B 抓取等待 Vuex/组件数据稳定的秒数。 |
-| `SGCC_DEBUG` | 完整 Debug 取证模式，默认 `false`；记录多源 observation、结构指纹、候选字段和 parser decision，不改变发布结果。 |
+| `SGCC_DEBUG` | 完整 Debug 取证模式，默认 `false`；生产解析始终使用相同的轻量 observation，完整 Component/DOM 仅进入诊断取证，因此开启前后抓取和发布结果保持一致。 |
 | `SGCC_DEBUG_DIR` | Debug bundle 目录，默认 `/data/debug`；最新一次固定在 `/data/debug/latest`。 |
+| `SGCC_ERROR_SCREENSHOT` | 错误现场截图开关，默认 `false`；`/data/errors` 默认只保存脱敏 metadata。截图无法自动可靠清除页面可见姓名/地址，开启后需人工检查。 |
+| `SGCC_ERROR_MAX_CAPTURES` | `/data/errors` 最多保留的错误现场目录数，默认 `10`。 |
 | `SGCC_DIAG` | 旧诊断开关兼容别名；设为 `true` 等价于 `SGCC_DEBUG=true`。 |
 | `SGCC_DIAG_DIR` | 旧诊断目录兼容配置；未设置 `SGCC_DEBUG_DIR` 时使用。 |
 | `DEBUG_MODE` | 旧环境变量兼容别名；仅开启 Debug，不再切换手机验证码登录。 |
+| `SGCC_CLEANUP_LEGACY_ENTITY_IDS` | 设为 `true` 时清理旧版仅使用户号末四位的 REST entity；默认 `false`，用于完成仪表盘迁移后的一次性清理。 |
+| `PUSH_TIMEOUT` | PushPlus、URL 通知和二维码通知的 HTTP 超时秒数，默认 `10`；通知失败不会改变国网抓取或 HA/MQTT 发布状态。 |
 | `SGCC_LOGIN_METHOD` | 登录方式；默认 `password`，仅显式设为 `phone-code` 时读取手机验证码。 |
 | `REPUBLISH_INTERVAL_MINUTES` | 已有数据重发布或补抓的间隔分钟数。 |
 | `SGCC_BROWSER_MODE` | 浏览器模式，Docker Compose 和 Add-on 默认 `browser-service`；旧模式可设 `local`。 |
@@ -291,11 +295,15 @@ SGCC_QRCODE_FALLBACK_UNATTENDED=false
 
 当 `PUBLISHER=mqtt` 或 `PUBLISHER=both` 且 MQTT broker 可用时，程序会向 `MQTT_DISCOVERY_PREFIX` 发布 discovery 配置。Home Assistant 会自动出现一个“国网电费 ****后四位”的 device。
 
-推荐使用 `PUBLISHER=mqtt`，此时只生成 MQTT Discovery 设备实体。`PUBLISHER=both` 会同时发布 MQTT Discovery 实体和 REST 兼容实体；REST 兼容实体沿用旧项目命名，例如 `sensor.electricity_charge_balance_xxxx`、`sensor.month_electricity_usage_xxxx`，主要用于迁移旧仪表盘或自动化。若不需要兼容旧实体，请使用 `PUBLISHER=mqtt`。
+推荐使用 `PUBLISHER=mqtt`，此时只生成 MQTT Discovery 设备实体。`PUBLISHER=both` 会同时发布 MQTT Discovery 和 REST state；两条发布路径共用同一个 `末四位_稳定摘要` 账户身份，避免多户号覆盖。
 
 如果升级后 HA 仍残留旧的 `unavailable` / `unknown` 实体，可以在 HA 的“设置 → 设备与服务 → 实体”中手动删除旧实体，或清理旧 MQTT retained discovery。
 
-户号会在实体名称、unique id 和日志中脱敏，只保留末四位用于区分。Discovery key 会进入 MQTT topic、`unique_id` 和 `object_id`；实际 entity id 由 Home Assistant 实体注册表生成，请以 HA 实际显示为准。
+户号在实体名称和日志中只显示末四位。MQTT topic、`unique_id`、`object_id` 和 REST entity 后缀使用 `末四位_稳定摘要`，例如 `0123_e2161a7e19`；两个户号即使末四位相同，也会生成不同身份。完整户号不会进入发布 payload。实际 entity id 由 Home Assistant 实体注册表生成，请以 HA 实际显示为准。
+
+从仅使用末四位的旧版本升级后，Home Assistant 会出现一组新的唯一实体。先把仪表盘和自动化切换到新实体；REST 发布用户随后可临时设置 `SGCC_CLEANUP_LEGACY_ENTITY_IDS=true` 运行一次，清理旧 REST state。MQTT publisher 在新实体成功发布后，自动清除本次账户数据对应的旧 retained Discovery 配置；新发布失败时保留旧实体。
+
+旧 REST 状态兜底会从当天缓存读取完整 13 位户号，再生成新的稳定身份。旧实体仍只能按末四位读取；当缓存中多个户号末四位相同时，这批旧状态没有可证明的账户归属，程序会跳过兜底并执行一次真实国网抓取。
 
 | 类型 | Discovery key | 显示名称示例 | 说明 |
 | --- | --- | --- | --- |
@@ -330,7 +338,7 @@ examples/basic/lovelace-sgcc-electricity.yaml
 
 1. Home Assistant → 仪表盘 → 编辑仪表盘 → 添加视图/原始配置。
 2. 粘贴示例内容作为一个 view。
-3. 把示例中的 `4840` 替换成你自己的户号末四位。
+3. 在 Home Assistant 开发者工具中确认本次生成的实际实体 ID，再替换示例实体。新实体身份包含户号末四位和稳定摘要。
 4. 日/月历史实体按 HA 实际出现的数据范围增删。
 
 `sgcc-electricity-card-xiaoshi-original.yaml`、`sgcc-electricity-card-xiaoshi-style.yaml` 和 `sgcc-electricity-card.yaml` 都已经替换成本项目实体字段，截图放在 `assets/lovelace-cards/`。其中 `sgcc-electricity-card.yaml` 来自当前自用页面 `/sgcc-electricity/overview`，依赖 `stack-in-card`、`mushroom`、`apexcharts-card` 和 `card-mod`。
@@ -409,9 +417,11 @@ Debug bundle 默认写入：
 └── sgcc-debug-bundle.zip
 ```
 
-其中 observation 按户号和页面 scope 关联 Network XHR/fetch、Vuex、受预算约束的 Vue Component `$data` 与 DOM label/value。Component 快照具有组件级和全局节点预算、深度/数组/字段上限及执行时间上限；截断位置保留在 bundle。parser decision 记录每个来源是接受、拒绝还是 fallback；未知金额只进入候选，不会被猜测发布。
+其中生产 observation 按户号和页面 scope 关联 Network XHR/fetch、Vuex 和受字段契约限制的 Vue Component 数据；必要的严格 DOM label/value 作为生产 fallback。完整受预算约束的 Vue Component `$data` 与额外 DOM 仅写入诊断取证，不进入 parser。Component 快照具有组件级和全局节点预算、深度/数组/字段上限及执行时间上限；截断位置保留在 bundle。parser decision 记录每个来源是接受、拒绝还是 fallback；未知金额只进入候选，不会被猜测发布。
 
-提交 issue 时优先附上 `sgcc-debug-bundle.zip` 和人工对照。包内完整户号、手机号、姓名、地址、password、token、cookie、authorization 等字段会递归脱敏。旧 `SGCC_DIAG=true` 保持兼容；仅开启该旧开关时继续使用 `SGCC_DIAG_DIR`。
+金额字段由 `sgcc_ha_bridge/field_contracts.py` 统一登记。新增省份字段需要脱敏 Debug 样本、fixture、字段语义和正负测试；Vue capture 与 parser 共用该注册表，避免分别追加猜测 alias。
+
+提交 issue 时优先附上 `sgcc-debug-bundle.zip` 和人工对照。包内完整户号、手机号、姓名、地址、password、token、cookie、authorization 等字段会递归脱敏；常见 `label/value`、`title/text` 和 `fieldName/fieldValue` 结构也按标签语义脱敏。Debug 根目录和每次运行目录权限为 `0700`，文件与压缩包权限为 `0600`。旧 `SGCC_DIAG=true` 保持兼容；仅开启该旧开关时继续使用 `SGCC_DIAG_DIR`。
 
 
 ### 日/月历史数量不固定

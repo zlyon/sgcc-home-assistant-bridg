@@ -34,6 +34,12 @@ class BrowserServiceConfigTestCase(unittest.TestCase):
         self.assertEqual(browser_service._chrome_cdp_port(), 19222)
         self.assertEqual(browser_service._cdp_probe_host(), "127.0.0.1")
 
+    def test_standalone_defaults_bind_management_and_cdp_to_loopback(self):
+        browser_service = self._load_browser_service()
+
+        self.assertEqual(browser_service.HOST, "127.0.0.1")
+        self.assertEqual(browser_service.CDP_HOST, "127.0.0.1")
+
     def test_cdp_forward_enabled_uses_internal_loopback_port(self):
         browser_service = self._load_browser_service(
             SGCC_BROWSER_CDP_HOST="0.0.0.0",

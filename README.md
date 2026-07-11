@@ -17,7 +17,7 @@
 - 支持峰 / 平 / 谷 / 尖分时电量。
 - 使用 SQLite 保存本地事实库，方便重发布和排障。
 - 支持 MQTT Discovery 自动生成 Home Assistant 设备和实体。
-- 保留 REST states API 兼容发布，方便旧仪表盘迁移。
+- 支持 MQTT Discovery、HA REST states API 或两者同时发布。
 - 支持 Docker Compose、GHCR 镜像和 Home Assistant OS / Supervised Add-on。
 - 默认提供官方 Google Chrome `browser-service` 模式，减少无人值守登录风控概率。
 - 验证码识别使用 OpenAI 兼容多模态接口，也兼容火山方舟 / 豆包 `ARK_*` 配置。
@@ -97,7 +97,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | 峰平谷尖 | 当前月已抓到日读数汇总后的分时电量。 |
 | 曲线数据 | `history` 实体属性里的 `daily` / `monthly` 数组。 |
 
-REST 兼容实体仍可用，主要用于迁移旧仪表盘或自动化。详细实体说明见 [DOCS.md#5-home-assistant-实体](DOCS.md#5-home-assistant-实体)。
+HA REST states API 发布仍可用，并与 MQTT 共用防碰撞账户身份。详细实体说明见 [DOCS.md#5-home-assistant-实体](DOCS.md#5-home-assistant-实体)。
 
 数据缺失、登录异常、发布异常或金额口径不一致时，按 [DOCS.md#debug-模式与-issue-反馈](DOCS.md#debug-模式与-issue-反馈) 开启 `SGCC_DEBUG=true`，运行一次后附上脱敏 Debug bundle。
 
@@ -118,7 +118,9 @@ SGCC_DEBUG=true
 /data/debug/latest/sgcc-debug-bundle.zip
 ```
 
-Debug 数据递归脱敏，并对响应体、组件、节点、深度和执行时间设置硬上限。未知字段不会直接作为金额发布；预算内的字段和值、截断位置和结构差异会进入 bundle，后续可直接转成 fixture/adapter。旧 `SGCC_DIAG=true` 保持兼容。
+Debug 数据递归脱敏，并对通用 `label/value` 结构中的姓名、地址、联系方式、账号和凭证值做关联脱敏；响应体、组件、节点、深度和执行时间均有硬上限。Debug 目录固定为 `0700`、文件固定为 `0600`。未知字段不会直接作为金额发布；预算内的字段和值、截断位置和结构差异会进入 bundle，后续可直接转成 fixture/adapter。旧 `SGCC_DIAG=true` 保持兼容。
+
+生产解析与 Debug 取证已经隔离：开启 Debug 前后使用同一组生产 observation，完整 Component `$data` 和额外 DOM 只进入诊断包。金额字段统一登记在 `sgcc_ha_bridge/field_contracts.py`，新增兼容项需要 Debug 样本、fixture 和正负测试。
 
 ## Lovelace 示例
 

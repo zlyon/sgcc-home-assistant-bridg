@@ -129,7 +129,7 @@ body:
     id: diag_summary
     attributes:
       label: SGCC_DEBUG 摘要 / Debug bundle
-      description: 开启 SGCC_DEBUG=true 后重新运行一次，粘贴摘要并优先附上 /data/debug/latest/sgcc-debug-bundle.zip。提交前仍请检查包内没有账号、密码、token、手机号和完整户号。
+      description: 开启 SGCC_DEBUG=true 后重新运行一次，粘贴摘要并优先附上 /data/debug/latest/sgcc-debug-bundle.zip。程序会递归脱敏并以 0600 权限保存文件；提交前请再人工检查包内没有账号、密码、token、手机号和完整户号。
       placeholder: |
         开启方式：
         SGCC_DEBUG=true
@@ -148,9 +148,10 @@ body:
         ========== SGCC DIAG SUMMARY END ==========
 
         可选附件/补充：
-        /data/diag/latest/summary.txt
-        /data/diag/latest/summary.json
-        /data/diag/latest/fields.redacted.json
+        /data/debug/latest/summary.txt
+        /data/debug/latest/summary.json
+        /data/debug/latest/fields.redacted.json
+        /data/debug/latest/sgcc-debug-bundle.zip
 
         如果当前环境暂未提供诊断，请说明原因和已尝试的版本。
       render: text

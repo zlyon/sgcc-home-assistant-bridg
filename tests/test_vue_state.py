@@ -1,5 +1,6 @@
 import unittest
 
+from sgcc_ha_bridge.field_contracts import FIELD_CONTRACTS
 from sgcc_ha_bridge.vue_state import (
     FULL_VUE_DATA_SCRIPT,
     SELECTED_VUE_DATA_SCRIPT,
@@ -13,6 +14,13 @@ class VueStateScriptTestCase(unittest.TestCase):
     def test_balance_page_local_fields_are_collected(self):
         for key in ("accountBalance", "queryTime", "accountNo", "address"):
             self.assertIn(f'"{key}"', SELECTED_VUE_DATA_SCRIPT)
+
+    def test_parser_field_contracts_are_captured_from_one_registry(self):
+        for contract in FIELD_CONTRACTS:
+            self.assertIn(contract.status, {"confirmed", "legacy"})
+            self.assertTrue(contract.evidence)
+            for key in contract.aliases:
+                self.assertIn(f'"{key}"', SELECTED_VUE_DATA_SCRIPT)
 
     def test_diag_only_money_fields_are_not_collected_by_default(self):
         for key in ("balance", "bal"):

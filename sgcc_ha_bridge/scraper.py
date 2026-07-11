@@ -249,7 +249,8 @@ class Scraper:
             label,
             url=self._safe_current_url(),
         )
-        snapshot = self._snapshot(wide_debug=debug_enabled())
+        # Production observations must be identical with Debug on or off.
+        snapshot = self._snapshot(wide_debug=False)
         observations = self._observations_for_scope(scope, snapshot)
         extraction = extract_account_data(scope, observations)
         data = extraction.data
@@ -277,7 +278,12 @@ class Scraper:
         )
         if self.diagnostic is not None:
             try:
-                self.diagnostic.record_page(label, snapshot, data)
+                diagnostic_snapshot = (
+                    self._snapshot(wide_debug=True)
+                    if debug_enabled()
+                    else snapshot
+                )
+                self.diagnostic.record_page(label, diagnostic_snapshot, data)
                 self.diagnostic.record_observations(observations)
                 self.diagnostic.record_decisions(extraction.decisions)
             except Exception as diag_error:
@@ -309,7 +315,7 @@ class Scraper:
             else:
                 components = vue_state.selected_vue_data(
                     self.driver,
-                    include_diag_fields=debug_enabled(),
+                    include_diag_fields=False,
                 ) or []
         except Exception as exc:
             components = []
@@ -326,6 +332,7 @@ class Scraper:
         observations: list[Observation] = []
         if self.network_recorder is not None:
             try:
+                self.network_recorder.flush(scope_id=scope.id)
                 observations.extend(self.network_recorder.observations(scope.id))
             except Exception:
                 pass
@@ -345,17 +352,6 @@ class Scraper:
             payload=snapshot.get("components") or [],
             metadata={"url": snapshot.get("url") or ""},
         ))
-        if debug_enabled():
-            dom = self._dom_snapshot()
-            if dom:
-                observations.append(Observation(
-                    source="dom",
-                    scope_id=scope.id,
-                    scope_label=scope.label,
-                    account_no=scope.account_no,
-                    payload=dom,
-                    metadata={"url": snapshot.get("url") or ""},
-                ))
         return observations
 
     def _dom_snapshot(self) -> list[dict[str, Any]]:

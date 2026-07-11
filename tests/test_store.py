@@ -232,6 +232,87 @@ class StoreTestCase(unittest.TestCase):
         self.assertEqual(row["total_usage_kwh"], 2.5)
         self.assertEqual(row["fetch_run_id"], run2)
 
+    def test_partial_upsert_preserves_existing_non_null_fields(self):
+        run1 = self.store.start_run(FetchRun(trigger_type="manual", started_at="run1"))
+        run2 = self.store.start_run(FetchRun(trigger_type="manual", started_at="run2"))
+        account_no = "1234567890123"
+        observed_at = "2026-07-11T10:00:00+08:00"
+        self.store.save_account_data(
+            AccountData(
+                account=Account(
+                    account_no=account_no,
+                    display_name="家庭用电",
+                    address="上海市某小区",
+                    province="31",
+                ),
+                balance=Balance(
+                    account_no=account_no,
+                    observed_at=observed_at,
+                    balance_cny=88,
+                    prepay_balance_cny=12,
+                    arrears_cny=3,
+                ),
+                monthly=[MonthlyReading(
+                    account_no=account_no,
+                    year_month="2026-07",
+                    total_usage_kwh=10,
+                    total_charge_cny=22.5,
+                    begin_date="2026-07-01",
+                    end_date="2026-07-31",
+                )],
+                daily=[DailyReading(
+                    account_no=account_no,
+                    date="2026-07-10",
+                    total_usage_kwh=5,
+                    valley_usage_kwh=1,
+                    flat_usage_kwh=2,
+                    peak_usage_kwh=2,
+                )],
+            ),
+            run1,
+        )
+
+        self.store.save_account_data(
+            AccountData(
+                account=Account(account_no=account_no),
+                balance=Balance(
+                    account_no=account_no,
+                    observed_at="2026-07-11T11:00:00+08:00",
+                    balance_cny=90,
+                ),
+                monthly=[MonthlyReading(
+                    account_no=account_no,
+                    year_month="2026-07",
+                    total_usage_kwh=11,
+                )],
+                daily=[DailyReading(
+                    account_no=account_no,
+                    date="2026-07-10",
+                    total_usage_kwh=6,
+                )],
+            ),
+            run2,
+        )
+
+        account = self.store.get_account(account_no)
+        balance = self.store.get_latest_balance(account_no)
+        monthly = self.store.get_monthly(account_no, limit=1)[0]
+        daily = self.store.get_daily(account_no, limit=1)[0]
+        self.assertEqual(account.display_name, "家庭用电")
+        self.assertEqual(account.address, "上海市某小区")
+        self.assertEqual(account.province, "31")
+        self.assertEqual(balance.balance_cny, 90)
+        self.assertEqual(balance.observed_at, "2026-07-11T11:00:00+08:00")
+        self.assertEqual(balance.prepay_balance_cny, 12)
+        self.assertEqual(balance.arrears_cny, 3)
+        self.assertEqual(monthly.total_usage_kwh, 11)
+        self.assertEqual(monthly.total_charge_cny, 22.5)
+        self.assertEqual(monthly.begin_date, "2026-07-01")
+        self.assertEqual(daily.total_usage_kwh, 6)
+        self.assertEqual(daily.valley_usage_kwh, 1)
+        self.assertEqual(daily.flat_usage_kwh, 2)
+        self.assertEqual(daily.peak_usage_kwh, 2)
+
     def test_start_finish_run_and_foreign_key(self):
         run_id = self.store.start_run(
             FetchRun(trigger_type="manual", started_at="2026-06-18T04:00:00+08:00")

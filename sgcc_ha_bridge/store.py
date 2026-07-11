@@ -191,9 +191,18 @@ class Store:
                 :account_no, :display_name, :address, :province, 1
             )
             ON CONFLICT(account_no) DO UPDATE SET
-                display_name = excluded.display_name,
-                address = excluded.address,
-                province = excluded.province,
+                display_name = CASE
+                    WHEN excluded.display_name <> '' THEN excluded.display_name
+                    ELSE accounts.display_name
+                END,
+                address = CASE
+                    WHEN excluded.address <> '' THEN excluded.address
+                    ELSE accounts.address
+                END,
+                province = CASE
+                    WHEN excluded.province <> '' THEN excluded.province
+                    ELSE accounts.province
+                END,
                 is_active = 1
             """,
             asdict(account),
@@ -443,9 +452,18 @@ class Store:
                 1, :fetch_run_id
             )
             ON CONFLICT(account_no) DO UPDATE SET
-                display_name = excluded.display_name,
-                address = excluded.address,
-                province = excluded.province,
+                display_name = CASE
+                    WHEN excluded.display_name <> '' THEN excluded.display_name
+                    ELSE accounts.display_name
+                END,
+                address = CASE
+                    WHEN excluded.address <> '' THEN excluded.address
+                    ELSE accounts.address
+                END,
+                province = CASE
+                    WHEN excluded.province <> '' THEN excluded.province
+                    ELSE accounts.province
+                END,
                 is_active = 1,
                 last_seen_fetch_run_id = excluded.last_seen_fetch_run_id
             """,
@@ -454,6 +472,20 @@ class Store:
 
     def _upsert_balance_no_commit(self, balance: Balance, fetch_run_id: int) -> None:
         data = {**asdict(balance), "fetch_run_id": fetch_run_id}
+        previous = self.conn.execute(
+            """
+            SELECT balance_cny, prepay_balance_cny, arrears_cny
+            FROM balances
+            WHERE account_no = ?
+            ORDER BY observed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (balance.account_no,),
+        ).fetchone()
+        if previous is not None:
+            for field in ("balance_cny", "prepay_balance_cny", "arrears_cny"):
+                if data[field] is None:
+                    data[field] = previous[field]
         self.conn.execute(
             """
             INSERT INTO balances (
@@ -464,9 +496,9 @@ class Store:
                 :prepay_balance_cny, :arrears_cny, :fetch_run_id
             )
             ON CONFLICT(account_no, observed_at) DO UPDATE SET
-                balance_cny = excluded.balance_cny,
-                prepay_balance_cny = excluded.prepay_balance_cny,
-                arrears_cny = excluded.arrears_cny,
+                balance_cny = COALESCE(excluded.balance_cny, balances.balance_cny),
+                prepay_balance_cny = COALESCE(excluded.prepay_balance_cny, balances.prepay_balance_cny),
+                arrears_cny = COALESCE(excluded.arrears_cny, balances.arrears_cny),
                 fetch_run_id = excluded.fetch_run_id
             """,
             data,
@@ -484,11 +516,11 @@ class Store:
                 :flat_usage_kwh, :peak_usage_kwh, :tip_usage_kwh, :fetch_run_id
             )
             ON CONFLICT(account_no, date) DO UPDATE SET
-                total_usage_kwh = excluded.total_usage_kwh,
-                valley_usage_kwh = excluded.valley_usage_kwh,
-                flat_usage_kwh = excluded.flat_usage_kwh,
-                peak_usage_kwh = excluded.peak_usage_kwh,
-                tip_usage_kwh = excluded.tip_usage_kwh,
+                total_usage_kwh = COALESCE(excluded.total_usage_kwh, readings_daily.total_usage_kwh),
+                valley_usage_kwh = COALESCE(excluded.valley_usage_kwh, readings_daily.valley_usage_kwh),
+                flat_usage_kwh = COALESCE(excluded.flat_usage_kwh, readings_daily.flat_usage_kwh),
+                peak_usage_kwh = COALESCE(excluded.peak_usage_kwh, readings_daily.peak_usage_kwh),
+                tip_usage_kwh = COALESCE(excluded.tip_usage_kwh, readings_daily.tip_usage_kwh),
                 fetch_run_id = excluded.fetch_run_id
             """,
             data,
@@ -506,10 +538,10 @@ class Store:
                 :begin_date, :end_date, :fetch_run_id
             )
             ON CONFLICT(account_no, year_month) DO UPDATE SET
-                total_usage_kwh = excluded.total_usage_kwh,
-                total_charge_cny = excluded.total_charge_cny,
-                begin_date = excluded.begin_date,
-                end_date = excluded.end_date,
+                total_usage_kwh = COALESCE(excluded.total_usage_kwh, readings_monthly.total_usage_kwh),
+                total_charge_cny = COALESCE(excluded.total_charge_cny, readings_monthly.total_charge_cny),
+                begin_date = COALESCE(excluded.begin_date, readings_monthly.begin_date),
+                end_date = COALESCE(excluded.end_date, readings_monthly.end_date),
                 fetch_run_id = excluded.fetch_run_id
             """,
             data,
@@ -525,8 +557,8 @@ class Store:
                 :account_no, :year, :total_usage_kwh, :total_charge_cny, :fetch_run_id
             )
             ON CONFLICT(account_no, year) DO UPDATE SET
-                total_usage_kwh = excluded.total_usage_kwh,
-                total_charge_cny = excluded.total_charge_cny,
+                total_usage_kwh = COALESCE(excluded.total_usage_kwh, readings_yearly.total_usage_kwh),
+                total_charge_cny = COALESCE(excluded.total_charge_cny, readings_yearly.total_charge_cny),
                 fetch_run_id = excluded.fetch_run_id
             """,
             data,

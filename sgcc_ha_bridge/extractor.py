@@ -8,7 +8,11 @@ from typing import Any, Iterable
 from .cache_validity import has_useful_account_data
 from .model import Account, AccountData, Balance
 from .observation import CaptureScope, Observation, ParserDecision
-from .parser import merge_account_data, parse_account_data
+from .parser import (
+    balance_values_from_explicit_label_row,
+    merge_account_data,
+    parse_account_data,
+)
 
 
 _AMOUNT_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
@@ -162,11 +166,11 @@ def _parse_dom_balance(scope: CaptureScope, payloads: list[Any]) -> AccountData 
         for item in payload:
             if not isinstance(item, dict):
                 continue
-            label = str(item.get("label") or item.get("text") or "")
-            value = str(item.get("value") or "")
-            if "账户余额" not in label and "电费余额" not in label:
+            values = balance_values_from_explicit_label_row(item)
+            value = values.get("accountBalance")
+            if value is None:
                 continue
-            match = _AMOUNT_RE.search(value or label)
+            match = _AMOUNT_RE.search(str(value))
             if not match:
                 continue
             amount = float(match.group(0))

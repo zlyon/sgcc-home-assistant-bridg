@@ -143,6 +143,70 @@ class CacheFileUpdator:
         return str(self.cache_file)
 
 
+class LegacyStateUpdator(CacheFileUpdator):
+    def __init__(self, cache_file: Path):
+        super().__init__(cache_file)
+        self.requested_sensors = []
+
+    def get_sensor_state(self, sensor_name):
+        self.requested_sensors.append(sensor_name)
+        if sensor_name.startswith(main.BALANCE_SENSOR_NAME):
+            return {"state": "12.34"}
+        return None
+
+
+class RepublishMqttFromLegacyStateTestCase(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.cache_file = Path(self.tmpdir.name) / "sgcc_cache.json"
+        self.old_publisher = main.MqttPublisher
+        main.MqttPublisher = FakeMqttPublisher
+        FakeMqttPublisher.published.clear()
+        FakeMqttPublisher.removed.clear()
+
+    def tearDown(self):
+        main.MqttPublisher = self.old_publisher
+        self.tmpdir.cleanup()
+
+    def test_legacy_state_republish_uses_full_cached_account_identity(self):
+        today = main.datetime.now().strftime("%Y-%m-%d")
+        self.cache_file.write_text(
+            '{'
+            f'"1234567890123": {{"timestamp": "{today}T01:00:00", "balance": 12.34}}'
+            '}'
+        )
+        updator = LegacyStateUpdator(self.cache_file)
+
+        self.assertTrue(main.republish_mqtt_from_legacy_ha_state(
+            updator,
+            FetcherConfig(PUBLISHER="mqtt"),
+        ))
+        self.assertEqual(
+            [item.account.account_no for item in FakeMqttPublisher.published],
+            ["1234567890123"],
+        )
+        self.assertTrue(
+            any(sensor.endswith("_0123") for sensor in updator.requested_sensors)
+        )
+
+    def test_legacy_state_republish_rejects_ambiguous_last_four_digits(self):
+        today = main.datetime.now().strftime("%Y-%m-%d")
+        self.cache_file.write_text(
+            '{'
+            f'"1234567890123": {{"timestamp": "{today}T01:00:00", "balance": 1.0}},'
+            f'"9876543210123": {{"timestamp": "{today}T01:00:00", "balance": 2.0}}'
+            '}'
+        )
+        updator = LegacyStateUpdator(self.cache_file)
+
+        self.assertFalse(main.republish_mqtt_from_legacy_ha_state(
+            updator,
+            FetcherConfig(PUBLISHER="mqtt"),
+        ))
+        self.assertEqual(FakeMqttPublisher.published, [])
+        self.assertEqual(updator.requested_sensors, [])
+
+
 class CacheFreshnessGuardTestCase(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()

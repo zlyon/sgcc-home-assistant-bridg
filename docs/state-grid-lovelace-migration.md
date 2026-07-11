@@ -24,7 +24,7 @@ type: custom:xiaoshi-state-grid-info
 ### 1. 已有 `state_grid` 仪表盘 YAML：离线字段替换
 
 ```bash
-python tools/convert_state_grid_lovelace.py input.yaml output.yaml --suffix 4840
+python tools/convert_state_grid_lovelace.py input.yaml output.yaml --account-no 你的13位户号
 ```
 
 脚本会替换常见 `state_grid` 实体，并把图表里的 `attributes.graph` 按上下文替换为本项目历史实体的 `daily` / `monthly`。

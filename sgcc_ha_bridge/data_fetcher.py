@@ -245,14 +245,31 @@ class DataFetcher:
                     f"年度用电={update_args['yearly_usage']}度, 年度电费={update_args['yearly_charge']}元, "
                     f"月用电={update_args['month_usage']}度, 月电费={update_args['month_charge']}元")
                 if updator is not None:
-                    rest_result = updator.update_one_userid(**update_args, cache_values=cache_args)
-                    rest_success = rest_result is not False
+                    try:
+                        rest_result = updator.update_one_userid(
+                            **update_args,
+                            cache_values=cache_args,
+                        )
+                        rest_success = rest_result is not False
+                        rest_detail = (
+                            "ok"
+                            if rest_success
+                            else "update_one_userid returned false"
+                        )
+                    except Exception as rest_error:
+                        rest_success = False
+                        rest_detail = f"exception: {redact_text(rest_error)}"
+                        logging.warning(
+                            f"用户 [{masked_user_id}] Home Assistant REST 发布异常，"
+                            "国网抓取和本地 Store 已完成，不触发重新登录: "
+                            f"{redact_text(rest_error)}"
+                        )
                     if diag is not None:
                         diag.record_publish(
                             user_id,
                             "ha_rest",
                             rest_success,
-                            "ok" if rest_success else "update_one_userid returned false",
+                            rest_detail,
                         )
                     if not rest_success:
                         logging.warning(
@@ -277,7 +294,12 @@ class DataFetcher:
                                 logging.warning(f"用户 [{masked_user_id}] MQTT 发布失败，已跳过。")
                     except Exception as mqtt_error:
                         if diag is not None:
-                            diag.record_publish(user_id, "mqtt", False, f"exception: {mqtt_error}")
+                            diag.record_publish(
+                                user_id,
+                                "mqtt",
+                                False,
+                                f"exception: {redact_text(mqtt_error)}",
+                            )
                         logging.warning(f"用户 [{masked_user_id}] MQTT 发布异常，已忽略: {redact_text(mqtt_error)}")
 
             if saved_count == 0:

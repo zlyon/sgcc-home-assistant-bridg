@@ -75,6 +75,20 @@ class MoneyCandidatesTestCase(unittest.TestCase):
         candidates = collect_money_candidates(store=store, components=[], limit=3)
         self.assertEqual(len(candidates), 3)
 
+    def test_long_service_identifier_is_not_a_money_candidate(self):
+        components = [{
+            "data": {
+                "onlineShop": {
+                    "label": "电费缴纳",
+                    "SERVICEID": "D250101123456789012301",
+                }
+            }
+        }]
+
+        candidates = collect_money_candidates(components=components)
+
+        self.assertEqual(candidates, [])
+
 
 if __name__ == "__main__":
     unittest.main()
