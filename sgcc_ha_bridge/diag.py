@@ -666,6 +666,7 @@ def _safe_env_snapshot() -> dict[str, Any]:
         "MQTT_PORT",
         "MQTT_DISCOVERY_PREFIX",
         "JOB_START_TIME",
+        "SGCC_DAILY_JITTER_MINUTES",
         "SGCC_DAILY_RUNS",
         "SGCC_BROWSER_MODE",
         "SGCC_CDP_ADDRESS",

@@ -204,8 +204,9 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `IGNORE_USER_ID` | 忽略指定户号，多个用英文逗号分隔。 |
 | `HASS_URL` | Home Assistant 地址，REST 发布使用。 |
 | `HASS_TOKEN` | Home Assistant 长期访问令牌，REST 发布使用。 |
-| `JOB_START_TIME` | 每日抓取开始时间，格式 `HH:MM`。 |
-| `SGCC_DAILY_RUNS` | 每天真实登录抓取次数；无人值守建议保持 `1`，设为 `2` 可恢复早晚两次。 |
+| `JOB_START_TIME` | 每日抓取基准时间，格式 `HH:MM`。 |
+| `SGCC_DAILY_JITTER_MINUTES` | 每日抓取相对基准时间的随机偏移窗口，范围 `0..180`，默认 `10`（即 ±10 分钟）；设为 `0` 关闭。每次进程启动抽取一次，持续运行期间每天沿用该实际时间。 |
+| `SGCC_DAILY_RUNS` | 每天真实登录抓取次数；无人值守建议保持 `1`，设为 `2` 可恢复早晚两次，两次共用同一启动偏移并保持 12 小时间隔。 |
 | `RETRY_TIMES_LIMIT` | 登录、验证码或抓取失败时的重试次数上限；风控类失败会熔断，不参与立即重试。 |
 | `RISK_COOLDOWN_MINUTES` | RK001/操作频繁/验证码通过但仍失败后的登录冷却分钟数，默认 `60`。 |
 | `SGCC_LOGIN_COOLDOWN_ENABLED` | 是否启用无人值守登录冷却，建议保持 `true`。 |
@@ -279,6 +280,7 @@ ARK_MODEL="ep-xxxxxxxx"
 
 ```env
 SGCC_DAILY_RUNS=1
+SGCC_DAILY_JITTER_MINUTES=10
 SGCC_LOGIN_COOLDOWN_ENABLED=true
 RISK_COOLDOWN_MINUTES=60
 SGCC_QRCODE_FALLBACK_UNATTENDED=false
@@ -288,6 +290,7 @@ SGCC_QRCODE_FALLBACK_UNATTENDED=false
 
 - 因已支持近 30 天日用电抓取，每天一次成功抓取通常足够补齐近期历史。
 - 默认不安排 12 小时后的第二次真实登录，降低晚间固定时间命中风控的概率。
+- `SGCC_DAILY_JITTER_MINUTES` 默认在基准时间前后 10 分钟内偏移，设为 `0` 可关闭，最大支持 `180`。偏移在每次容器/进程启动时抽取一次，持续运行期间不会每天重抽；该配置只减少固定时刻访问特征，不保证规避或解决 RK001，也不能替代低频登录和风控冷却。
 - `RETRY_TIMES_LIMIT` 仍用于登录失败或 session 明确过期等普通临时失败。登录已成功但 Path B 动态业务数据暂时为空时，程序会先在同一个浏览器 session 内恢复一次；只有明确确认 session 已过期才会重新登录。session 仍有效或状态无法确认时，恢复耗尽后会停止本轮，避免额外消耗登录次数。
 - RK001、操作频繁、验证码通过但登录仍失败、验证码多次识别失败会被视为不适合立即重试。
 - 二维码兜底适合人工手动排障，不适合作为默认无人值守路径。

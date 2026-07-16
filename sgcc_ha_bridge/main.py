@@ -24,6 +24,40 @@ from .store import Store
 from .login_guard import NonRetryableFetchError, env_bool, get_login_cooldown
 
 
+DEFAULT_DAILY_JITTER_MINUTES = 10
+MAX_DAILY_JITTER_MINUTES = 180
+
+
+def _daily_jitter_minutes(raw_value=None) -> int:
+    raw_value = os.getenv("SGCC_DAILY_JITTER_MINUTES") if raw_value is None else raw_value
+    if raw_value is None:
+        return DEFAULT_DAILY_JITTER_MINUTES
+    try:
+        value = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        logging.warning(
+            f"SGCC_DAILY_JITTER_MINUTES={raw_value!r} 无效，已回退为默认 "
+            f"{DEFAULT_DAILY_JITTER_MINUTES} 分钟。"
+        )
+        return DEFAULT_DAILY_JITTER_MINUTES
+    if not 0 <= value <= MAX_DAILY_JITTER_MINUTES:
+        logging.warning(
+            f"SGCC_DAILY_JITTER_MINUTES={value} 超出 0..{MAX_DAILY_JITTER_MINUTES}，"
+            f"已回退为默认 {DEFAULT_DAILY_JITTER_MINUTES} 分钟。"
+        )
+        return DEFAULT_DAILY_JITTER_MINUTES
+    return value
+
+
+def _daily_schedule_times(job_start_time: str, jitter_minutes: int, daily_runs: int = 1, randint=random.randint):
+    offset_minutes = randint(-jitter_minutes, jitter_minutes) if jitter_minutes else 0
+    first_run = datetime.strptime(job_start_time, "%H:%M") + timedelta(minutes=offset_minutes)
+    run_times = [first_run.strftime("%H:%M")]
+    if daily_runs >= 2:
+        run_times.append((first_run + timedelta(hours=12)).strftime("%H:%M"))
+    return offset_minutes, run_times
+
+
 def main():
     global RETRY_TIMES_LIMIT
     if 'PYTHON_IN_DOCKER' not in os.environ:
@@ -76,21 +110,25 @@ def main():
     fetcher = DataFetcher(PHONE_NUMBER, PASSWORD)
     updator = SensorUpdator() if config.PUBLISHER in {"rest", "both"} else None
 
-    # 生成随机延迟时间（-10分钟到+10分钟）
-    random_delay_minutes = random.randint(-10, 10)
-    parsed_time = datetime.strptime(JOB_START_TIME, "%H:%M") + timedelta(minutes=random_delay_minutes)
+    jitter_minutes = _daily_jitter_minutes()
+    random_delay_minutes, daily_run_times = _daily_schedule_times(
+        JOB_START_TIME,
+        jitter_minutes,
+        SGCC_DAILY_RUNS,
+    )
     masked_phone = DataFetcher._mask_secret(PHONE_NUMBER)
-    logging.info(f"当前登录用户名为 {masked_phone}，Home Assistant 地址为 {HASS_URL}，程序将每天在 {parsed_time.strftime('%H:%M')} 执行。")
+    logging.info(
+        f"当前登录用户名为 {masked_phone}，Home Assistant 地址为 {HASS_URL}。"
+        f"每日抓取基准时间={JOB_START_TIME}，本次进程启动使用随机窗口=±{jitter_minutes} 分钟，"
+        f"抽取偏移={random_delay_minutes:+d} 分钟，实际时间={daily_run_times[0]}。"
+    )
 
-    # 添加随机延迟
-    next_run_time = parsed_time + timedelta(hours=12)
-
-    schedule.every().day.at(parsed_time.strftime("%H:%M")).do(safe_scheduled_job, run_task, fetcher, "schedule")
-    if SGCC_DAILY_RUNS >= 2:
-        schedule.every().day.at(next_run_time.strftime("%H:%M")).do(safe_scheduled_job, run_task, fetcher, "schedule")
-        logging.info(f'立即执行任务！下次运行时间为每天 {parsed_time.strftime("%H:%M")} 和 {next_run_time.strftime("%H:%M")}')
+    for run_time in daily_run_times:
+        schedule.every().day.at(run_time).do(safe_scheduled_job, run_task, fetcher, "schedule")
+    if len(daily_run_times) >= 2:
+        logging.info(f"立即执行任务！下次运行时间为每天 {' 和 '.join(daily_run_times)}，两次共用同一启动偏移。")
     else:
-        logging.info(f'立即执行任务！下次运行时间为每天 {parsed_time.strftime("%H:%M")}；无人值守模式默认不安排晚间第二次登录。')
+        logging.info(f"立即执行任务！下次运行时间为每天 {daily_run_times[0]}；无人值守模式默认不安排晚间第二次登录。")
 
     # 定期重发数据，防止HA重启后数据丢失
     # 如果缓存数据日期与当前日期不一致，则从国家电网重新获取数据

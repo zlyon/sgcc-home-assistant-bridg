@@ -75,6 +75,16 @@ class DiagSwitchTestCase(unittest.TestCase):
             collector.record_runtime(stage="test")
             self.assertEqual(collector.runtime["debug_mode"], "false")
 
+    def test_runtime_includes_daily_jitter_in_safe_environment(self):
+        with patch.dict(
+            os.environ,
+            {"SGCC_DAILY_JITTER_MINUTES": "45"},
+            clear=False,
+        ):
+            collector = DiagnosticCollector()
+            collector.record_runtime(stage="test")
+            self.assertEqual(collector.runtime["env"]["SGCC_DAILY_JITTER_MINUTES"], "45")
+
     def test_legacy_diag_switch_keeps_legacy_output_directory(self):
         with patch.dict(
             os.environ,
