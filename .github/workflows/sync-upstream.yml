@@ -1,55 +1,28 @@
 name: 同步上游仓库代码 触发阿里云ACR自动构建
-# 执行规则：每10分钟自动检测；支持页面手动点运行
+permissions:
+  contents: write
+
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
   sync_fork:
     runs-on: ubuntu-latest
+    if: ${{ github.event.repository.fork }}
     steps:
-      # 拉取当前你的fork仓库代码
-      - name: Checkout Fork 仓库
-        uses: actions/checkout@v5
+      - name: Sync upstream changes
+        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GH_PAT }}
+          upstream_sync_repo: ${{ secrets.UPSTREAM_REPO }}
+          upstream_sync_branch: main
+          target_sync_branch: main
+          target_repo_token: ${{ secrets.GH_PAT || github.token }}
+          test_mode: false
 
-      # 配置提交用户
-      - name: Git 基础配置
+      - name: 同步失败告警
+        if: failure()
         run: |
-          git config --global user.name "Sync Bot"
-          git config --global user.email "sync-bot@github.com"
-
-      # 添加上游源仓库
-      - name: 绑定上游远程仓库
-        run: |
-          git remote add upstream https://github.com/${{ secrets.UPSTREAM_REPO }}.git
-          git fetch upstream
-
-      # 判断上游是否有新提交（主分支main）
-      - name: 检测代码是否更新
-        id: check_diff
-        run: |
-          LOCAL_HEAD=$(git rev-parse main)
-          UPSTREAM_HEAD=$(git rev-parse upstream/main)
-          if [[ "${LOCAL_HEAD}" != "${UPSTREAM_HEAD}" ]]; then
-            echo "UPDATE=1" >> $GITHUB_ENV
-          else
-            echo "UPDATE=0" >> $GITHUB_ENV
-          fi
-
-      # 有更新则合并并推送fork，推送会自动触发阿里云ACR webhook构建
-      - name: 同步上游代码到Fork
-        if: env.UPDATE == '1'
-        run: |
-          git checkout main
-          # 快进合并，无冲突直接同步
-          git merge --ff-only upstream/main
-          git push origin main
-
-      # 无更新跳过
-      - name: 无新版本跳过同步
-        if: env.UPDATE == '0'
-        run: echo "上游仓库暂无更新，无需同步，不触发镜像构建"
+          echo "[Error] 上游工作流文件变更，定时同步暂停，请手动同步一次Fork"
+          exit 1
