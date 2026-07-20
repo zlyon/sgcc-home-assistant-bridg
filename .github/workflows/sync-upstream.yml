@@ -11,7 +11,7 @@ jobs:
     steps:
       # 拉取当前你的fork仓库代码
       - name: Checkout Fork 仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
