@@ -1,7 +1,9 @@
 name: 同步上游仓库代码 触发阿里云ACR自动构建
+# 工作流读写权限
 permissions:
   contents: write
 
+# 触发规则：每日定时 + 手动执行
 on:
   schedule:
     - cron: '0 0 * * *'
@@ -10,20 +12,49 @@ on:
 jobs:
   sync_fork:
     runs-on: ubuntu-latest
+    # 仅Fork仓库执行
     if: ${{ github.event.repository.fork }}
     steps:
-      - name: Sync upstream changes
-        uses: aormsby/Fork-Sync-With-Upstream-action@v3.4
+      # 拉取完整代码
+      - name: Checkout 仓库代码
+        uses: actions/checkout@v5
         with:
-          upstream_sync_repo: ${{ secrets.UPSTREAM_REPO }}
-          upstream_sync_branch: main
-          target_sync_branch: main
-          target_repo_token: ${{ secrets.GH_PAT }}
-          test_mode: false
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
 
-      - name: 同步失败告警
-        if: failure()
+      # 配置提交用户
+      - name: 配置Git提交者
         run: |
-          echo "[Error] 同步失败，错误码128代表Git认证失败"
-          echo "排查方向：1. GH_PAT令牌完整勾选repo权限；2. UPSTREAM_REPO仓库地址拼写正确；3. Token未过期"
-          exit 1
+          git config --global user.name "Sync Bot"
+          git config --global user.email "sync-bot@github.com"
+
+      # 添加上游远程仓库
+      - name: 绑定上游源仓库
+        run: |
+          git remote add upstream https://github.com/${{ secrets.UPSTREAM_REPO }}.git
+          git fetch upstream
+
+      # 对比上下游commit，判断是否有更新
+      - name: 检测上游更新
+        id: check_diff
+        run: |
+          LOCAL_HEAD=$(git rev-parse main)
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+          if [[ "$LOCAL_HEAD" != "$UPSTREAM_HEAD" ]]; then
+            echo "UPDATE=1" >> $GITHUB_ENV
+          else
+            echo "UPDATE=0" >> $GITHUB_ENV
+          fi
+
+      # 存在更新则合并并推送，push自动触发ACR构建
+      - name: 同步代码并推送
+        if: env.UPDATE == '1'
+        run: |
+          git checkout main
+          git merge upstream/main --no-edit
+          git push origin main
+
+      # 无更新直接结束
+      - name: 无上游更新，跳过推送
+        if: env.UPDATE == '0'
+        run: echo "上游仓库无新提交，无需同步"
