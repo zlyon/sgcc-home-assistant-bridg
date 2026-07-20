@@ -18,11 +18,12 @@ jobs:
           upstream_sync_repo: ${{ secrets.UPSTREAM_REPO }}
           upstream_sync_branch: main
           target_sync_branch: main
-          target_repo_token: ${{ secrets.GH_PAT || github.token }}
+          target_repo_token: ${{ secrets.GH_PAT }}
           test_mode: false
 
       - name: 同步失败告警
         if: failure()
         run: |
-          echo "[Error] 上游工作流文件变更，定时同步暂停，请手动同步一次Fork"
+          echo "[Error] 同步失败，错误码128代表Git认证失败"
+          echo "排查方向：1. GH_PAT令牌完整勾选repo权限；2. UPSTREAM_REPO仓库地址拼写正确；3. Token未过期"
           exit 1
