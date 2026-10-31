@@ -9,6 +9,7 @@ from sgcc_ha_bridge.click_captcha_solver import (
     _MONTAGE_CELL,
     _build_symbol_montage,
     _parse_picks,
+    _scale_to_height,
     _symbol_boxes,
 )
 
@@ -214,6 +215,115 @@ class SymbolSegmentationTestCase(unittest.TestCase):
 
         self.assertEqual(solver._solve_by_symbols(buffer.getvalue(), ["1", "8", "9"]), [])
         solver._ask_symbol_picks.assert_not_called()
+
+
+class ReferenceStripTestCase(unittest.TestCase):
+    """参考目标是图片（标题条）时，走同一套「切符号 + 选编号」。"""
+
+    @staticmethod
+    def _canvas():
+        image = Image.new("RGB", (320, 200), (222, 176, 120))
+        draw = ImageDraw.Draw(image)
+        for x, y in [(30, 30), (140, 30), (250, 30), (80, 140)]:
+            draw.rectangle([x, y, x + 24, y + 24], outline=(0, 0, 0), width=3)
+        return image
+
+    @staticmethod
+    def _strip():
+        """假的标题条：三个字符挤在一条灰底里。"""
+        strip = Image.new("RGB", (90, 30), (200, 200, 200))
+        draw = ImageDraw.Draw(strip)
+        for offset in (10, 40, 70):
+            draw.rectangle([offset - 6, 6, offset + 6, 24], outline=(0, 0, 0), width=2)
+        return strip
+
+    @staticmethod
+    def _png(image):
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    def test_picks_map_to_blob_centers(self):
+        image = self._canvas()
+        boxes = _symbol_boxes(image)
+
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._ask_strip_picks = Mock(return_value=[3, 0, 2])
+
+        coords = solver._solve_by_reference_strip(
+            self._png(image), self._png(self._strip())
+        )
+        self.assertEqual(
+            coords,
+            [(boxes[3]["cx"], boxes[3]["cy"]),
+             (boxes[0]["cx"], boxes[0]["cy"]),
+             (boxes[2]["cx"], boxes[2]["cy"])],
+        )
+
+    def test_missing_reference_is_rejected(self):
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._ask_strip_picks = Mock(return_value=[0, 1, 2])
+
+        self.assertEqual(
+            solver._solve_by_reference_strip(self._png(self._canvas()), None), []
+        )
+        solver._ask_strip_picks.assert_not_called()
+
+    def test_too_few_symbols_skips_model(self):
+        image = Image.new("RGB", (200, 120), (222, 176, 120))
+        ImageDraw.Draw(image).rectangle([20, 20, 60, 60], outline=(0, 0, 0), width=3)
+
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._ask_strip_picks = Mock(return_value=[0, 1, 2])
+
+        self.assertEqual(
+            solver._solve_by_reference_strip(
+                self._png(image), self._png(self._strip())
+            ),
+            [],
+        )
+        solver._ask_strip_picks.assert_not_called()
+
+    def test_invalid_picks_are_rejected(self):
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._ask_strip_picks = Mock(return_value=[0, 1])
+
+        self.assertEqual(
+            solver._solve_by_reference_strip(
+                self._png(self._canvas()), self._png(self._strip())
+            ),
+            [],
+        )
+
+    def test_solve_uses_strip_path_when_reference_is_image(self):
+        """targets 为空（标题是图片）时，不再让模型直接给坐标。"""
+        image = self._canvas()
+        strip = self._strip()
+
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._download = Mock(side_effect=lambda url: strip_bytes if url == "ref" else image_bytes)
+        solver._split_strip = Mock(return_value=["a", "b", "c"])
+        solver._solve_by_reference_strip = Mock(return_value=[(1, 2), (3, 4), (5, 6)])
+        solver._find_all_icons = Mock(return_value=[(9, 9)])
+
+        strip_bytes = self._png(strip)
+        image_bytes = self._png(image)
+
+        coords = solver.solve("ref", "main", image.width, image.height)
+
+        self.assertEqual(coords, [(1, 2), (3, 4), (5, 6)])
+        solver._solve_by_reference_strip.assert_called_once()
+        solver._find_all_icons.assert_not_called()
+
+    def test_strip_is_upscaled_before_sending(self):
+        """标题条只有二十来像素高，必须放大再送模型。"""
+        strip = self._strip()
+        scaled = _scale_to_height(strip, 200)
+
+        self.assertEqual(scaled.height, 200)
+        self.assertGreater(scaled.width, strip.width)
+        # 已经很宽的图不应被缩小
+        self.assertIs(_scale_to_height(scaled, 100), scaled)
 
 
 class SymbolPickParsingTestCase(unittest.TestCase):
