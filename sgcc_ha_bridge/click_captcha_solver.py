@@ -25,6 +25,7 @@ from PIL import Image
 from openai import OpenAI
 
 from . import const
+from .llm_config import thinking_extra_body
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +347,7 @@ class ClickCaptchaSolver:
                 ],
                 max_tokens=4096,
                 response_format={"type": "json_object"},
+                extra_body=thinking_extra_body() or None,
             )
             output = response.choices[0].message.content or ""
             logger.info(f"大模型响应: {output[:400]}")

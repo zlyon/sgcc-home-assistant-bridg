@@ -12,6 +12,10 @@
 
 - 新增 `sgcc_ha_bridge/overlay_captcha.py`：DOM 定位非腾讯结构浮层 → 截屏裁剪并按浮层放大 → 标题行单独放大后作为第二张图 → 多模态模型给出比例坐标 → CDP 真实鼠标事件点击 → 点「确定」→ 复查浮层是否消失。标题字符在整页里只有十几像素高，是此前识别不准的主要原因。
 - 新增环境变量 `SGCC_CAPTCHA_RENDER_WAIT`（发码等待秒数，默认 8）与 `SGCC_OVERLAY_CAPTCHA_ATTEMPTS`（解算重试轮次，默认 2）。
+- 新增环境变量 `SGCC_LLM_THINKING`：智谱 GLM 用 `thinking.type` 关闭深度思考，与火山方舟的 `reasoning_effort` 互斥，按厂商二选一即可。
+- 模型请求改为逐级降级：`reasoning_effort` → `response_format=json_object` → 朴素请求 → 去掉 `image_url.detail`。不同厂商的 OpenAI 兼容层支持的字段不一致，任何一级成功即返回，不必再手动试参数。
+- 新增环境变量 `SGCC_LLM_IMAGE_DETAIL`（默认 `high`，填 `off` 去掉 `image_url.detail`）。
+- 图形点选的输出预算由 2048 提到 4096：强制思考的模型（如 GLM-5.3-Flash）把推理 token 算在输出里，2048 容易被推理吃光而返回空正文。按实际输出计费，对不思考的模型没有额外成本。
 - 新增 `tests/test_overlay_captcha.py`：覆盖坐标换算、符号下标反查、方案解析容错与浮层探测异常处理，不依赖浏览器和模型。
 
 ### Notes

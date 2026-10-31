@@ -62,3 +62,18 @@ def load_llm_config() -> LlmConfig:
         default=DEFAULT_MODEL,
     )
     return LlmConfig(api_key=api_key, base_url=base_url, model=model, source=key_source)
+
+
+def thinking_extra_body() -> dict:
+    """厂商私有的思考模式开关，走 OpenAI SDK 的 ``extra_body``。
+
+    智谱 GLM 只认 ``thinking: {"type": "disabled"}``；火山方舟/OpenAI 系走
+    ``reasoning_effort``。两者不能互换，填错会被网关拒绝，调用方按降级链处理即可。
+    `SGCC_LLM_THINKING` 留空表示不传该参数。
+    """
+    value = (os.getenv("SGCC_LLM_THINKING") or "").strip().lower()
+    if value in {"disabled", "disable", "none", "off", "false", "0"}:
+        return {"thinking": {"type": "disabled"}}
+    if value in {"enabled", "enable", "on", "true", "1"}:
+        return {"thinking": {"type": "enabled"}}
+    return {}

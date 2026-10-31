@@ -24,6 +24,8 @@ from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from .llm_config import thinking_extra_body
+
 from .click_captcha_solver import ClickCaptchaSolver
 
 logger = logging.getLogger(__name__)
@@ -333,6 +335,7 @@ def _solve_slider(driver: WebDriver, selectors: dict) -> bool:
                 ],
             }],
             max_tokens=50,
+            extra_body=thinking_extra_body() or None,
         )
 
         output = response.choices[0].message.content or ""

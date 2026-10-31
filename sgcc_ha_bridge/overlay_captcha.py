@@ -36,6 +36,7 @@ import time
 from typing import Any, Optional
 
 from . import const
+from .llm_config import thinking_extra_body
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,10 @@ _TITLE_ZOOM = 6.0
 _TITLE_BAND = (0.02, 0.03, 0.70, 0.16)
 # 单张图送模型前的最大边长，避免超出模型侧的大小限制。
 _MAX_SIDE = 1600
+# 输出预算。强制思考的模型（如 GLM-5.3-Flash）把推理 token 也算在输出里，
+# 2048 容易被推理吃光而留下空正文，这里放宽到 4096；按实际输出计费，不设成本的
+# 模型不会因此多花钱。若换用推理很长的模型仍返回空内容，可再上调。
+_MAX_TOKENS = 4096
 
 _SYSTEM_PROMPT = (
     "你是图形验证码识别器。只输出一个 JSON 对象，不要 markdown、不要解释。"
@@ -386,6 +391,37 @@ def _data_uri(png: bytes) -> str:
     return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
 
 
+def _image_part(png: bytes) -> dict:
+    """构造一张图片消息块。
+
+    `detail` 是 OpenAI 的嵌套字段，火山方舟认，智谱等厂商不保证认，因此可用
+    `SGCC_LLM_IMAGE_DETAIL=off` 去掉；请求被拒时也会自动去掉再试一次。
+    """
+    image: dict[str, Any] = {"url": _data_uri(png)}
+    detail = (os.getenv("SGCC_LLM_IMAGE_DETAIL") or "high").strip().lower()
+    if detail not in {"", "off", "none", "false", "0"}:
+        image["detail"] = detail
+    return {"type": "image_url", "image_url": image}
+
+
+def _without_detail(content: list[dict]) -> list[dict]:
+    """去掉所有图片块里的 detail 字段，厂商不认这个嵌套参数时用。"""
+    cleaned: list[dict] = []
+    for part in content:
+        if part.get("type") == "image_url" and isinstance(part.get("image_url"), dict):
+            image = {k: v for k, v in part["image_url"].items() if k != "detail"}
+            cleaned.append({"type": "image_url", "image_url": image})
+        else:
+            cleaned.append(part)
+    return cleaned
+
+
+def _extra_body() -> dict:
+    """厂商私有的思考模式开关，实现见 ``llm_config.thinking_extra_body``。"""
+    return thinking_extra_body()
+
+
+
 def _ask_model(overlay_png: bytes, title_png: Optional[bytes]) -> dict:
     """把浮层截图与标题放大图一起送模型，返回解析后的方案。"""
     from PIL import Image
@@ -397,23 +433,9 @@ def _ask_model(overlay_png: bytes, title_png: Optional[bytes]) -> dict:
     except Exception:
         pass
 
-    content = [
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": _data_uri(overlay_png),
-                "detail": "high",
-            },
-        }
-    ]
+    content = [_image_part(overlay_png)]
     if title_png:
-        content.append({
-            "type": "image_url",
-            "image_url": {
-                "url": _data_uri(title_png),
-                "detail": "high",
-            },
-        })
+        content.append(_image_part(title_png))
     content.append({
         "type": "text",
         "text": _USER_PROMPT.format(w=width or "?", h=height or "?"),
@@ -425,29 +447,32 @@ def _ask_model(overlay_png: bytes, title_png: Optional[bytes]) -> dict:
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": content},
         ],
-        "max_tokens": 2048,
+        "max_tokens": _MAX_TOKENS,
     }
 
     effort = (os.getenv("SGCC_LLM_REASONING_EFFORT") or "").strip()
+    extra = _extra_body()
     client = _client()
 
-    # 思考类模型：部分型号（Kimi K3 等）默认强制深度思考，会把 max_tokens 全花在
-    # reasoning 上导致正文为空。传 low/none 压一压；不支持该参数的模型会报错，
-    # 捕获后去掉参数重试一次即可。
+    # 兼容层差异：不同厂商支持的开关不同，按「最可能成功」的顺序逐级降级，
+    # 任何一级成功就返回，全部失败才把最后一个异常抛出。
+    attempts: list[dict[str, Any]] = []
     if effort:
+        attempts.append({"reasoning_effort": effort, "extra_body": extra})
+    attempts.append({"response_format": {"type": "json_object"}, "extra_body": extra})
+    attempts.append({"extra_body": extra})
+
+    for options in attempts:
         try:
-            response = client.chat.completions.create(reasoning_effort=effort, **kwargs)
+            response = client.chat.completions.create(**options, **kwargs)
             _log_usage(response)
             return _parse(_content_of(response))
         except Exception as error:
-            logger.info("通用验证码：模型不接受 reasoning_effort=%s（%s），改用默认", effort, error)
+            logger.info("通用验证码：这组参数被拒（%s），继续降级", error)
 
-    try:
-        response = client.chat.completions.create(response_format={"type": "json_object"}, **kwargs)
-    except Exception as error:
-        logger.info("通用验证码：模型不支持 json_object（%s），改用普通模式", error)
-        response = client.chat.completions.create(**kwargs)
-
+    # 最后一搏：去掉 image_url.detail 与厂商私有开关，只留最朴素的 OpenAI 字段。
+    kwargs["messages"][1]["content"] = _without_detail(content)
+    response = client.chat.completions.create(**kwargs)
     _log_usage(response)
     return _parse(_content_of(response))
 

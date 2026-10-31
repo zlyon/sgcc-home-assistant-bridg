@@ -159,5 +159,41 @@ class EnvIntTestCase(unittest.TestCase):
             self.assertEqual(oc._env_int("X", 3, 1, 4), 3)
 
 
+class VendorCompatTestCase(unittest.TestCase):
+    """各厂商 OpenAI 兼容层的差异：图文块字段与思考开关。"""
+
+    def test_image_part_has_detail_by_default(self):
+        part = oc._image_part(b"png")
+        self.assertEqual(part["type"], "image_url")
+        self.assertEqual(part["image_url"]["detail"], "high")
+        self.assertTrue(part["image_url"]["url"].startswith("data:image/png;base64,"))
+
+    def test_image_part_can_drop_detail(self):
+        with patch.dict("os.environ", {"SGCC_LLM_IMAGE_DETAIL": "off"}, clear=True):
+            part = oc._image_part(b"png")
+        self.assertNotIn("detail", part["image_url"])
+
+    def test_without_detail_strips_only_images(self):
+        content = [
+            oc._image_part(b"png"),
+            {"type": "text", "text": "hi"},
+        ]
+        cleaned = oc._without_detail(content)
+        self.assertNotIn("detail", cleaned[0]["image_url"])
+        self.assertEqual(cleaned[1], {"type": "text", "text": "hi"})
+
+    def test_extra_body_disables_thinking(self):
+        with patch.dict("os.environ", {"SGCC_LLM_THINKING": "disabled"}, clear=True):
+            self.assertEqual(oc._extra_body(), {"thinking": {"type": "disabled"}})
+        with patch.dict("os.environ", {"SGCC_LLM_THINKING": "none"}, clear=True):
+            self.assertEqual(oc._extra_body(), {"thinking": {"type": "disabled"}})
+        with patch.dict("os.environ", {"SGCC_LLM_THINKING": "enabled"}, clear=True):
+            self.assertEqual(oc._extra_body(), {"thinking": {"type": "enabled"}})
+
+    def test_extra_body_empty_when_unset(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(oc._extra_body(), {})
+
+
 if __name__ == "__main__":
     unittest.main()
