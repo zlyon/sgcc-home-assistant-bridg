@@ -546,10 +546,12 @@ class SgccLogin:
         """
         deadline = time.monotonic() + max(0.0, timeout)
         while True:
-            if overlay_present(driver):
-                return "overlay"
+            # 先认腾讯组件：它的点选题同样带「依次点击」文案，通用浮层探测也会命中，
+            # 若先判浮层就会被抢走，走不到带符号分割的腾讯解算器。
             if has_captcha_in_browser(driver):
                 return "tencent"
+            if overlay_present(driver):
+                return "overlay"
             if time.monotonic() >= deadline:
                 return ""
             time.sleep(0.4)
@@ -886,12 +888,14 @@ class SgccLogin:
             # 表现出来就是「不点验证、也不发验证码」。
             if latest["status"] == "sent":
                 return latest
+            # 腾讯组件优先：它加载后就在 DOM 里，比浮层探测更可靠；两者都带
+            # 「依次点击」文案，先判浮层会把腾讯点选题错交给通用解算器。
+            if has_captcha_in_browser(driver):
+                return {**latest, "status": "captcha"}
             # 国网自研的点选浮层不是腾讯结构，has_captcha_in_browser 认不出来。
             # 这里每隔 0.4 秒补探一次，命中后交给视觉解算，否则会在 pending 上耗到超时。
             if tick % 2 == 0 and overlay_present(driver):
                 return {**latest, "status": "captcha_generic"}
-            if has_captcha_in_browser(driver):
-                return {**latest, "status": "captcha"}
             if latest["status"] == "error":
                 # 退出前再确认一次：报错文案与浮层可能同时出现。
                 if overlay_present(driver):

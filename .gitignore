@@ -175,3 +175,6 @@ homeassistant_sgcc_sensors
 # Local workflow/task state
 .workflow/
 data/
+
+# WorkBuddy 项目记忆与本地调试目录
+.workbuddy/

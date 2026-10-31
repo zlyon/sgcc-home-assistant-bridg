@@ -17,11 +17,12 @@ import math
 import os
 import re
 import statistics
+import time
 from itertools import permutations
 from typing import List, Optional, Tuple
 
 import requests
-from PIL import Image
+from PIL import Image, ImageDraw
 from openai import OpenAI
 
 from . import const
@@ -31,6 +32,17 @@ logger = logging.getLogger(__name__)
 
 _TEXT_REFERENCE_SAMPLE_COUNT = 3
 _TEXT_REFERENCE_CONSENSUS_RATIO = 0.06
+
+# 符号分割参数。国网目下的点选题是「亮色照片底图 + 纯黑线描符号」，
+# 用亮度阈值就能干净地切出来；切不出来说明换了题型，交给坐标直读兜底。
+_MASK_MAX_CHANNEL = 95      # 三通道都低于它才算描边
+_MASK_MAX_MEAN = 80
+_SYMBOL_MIN_AREA = 60       # 小于这个像素数当作噪点
+_SYMBOL_MIN_SIDE = 9        # 描边符号的最短边
+_SYMBOL_MIN_BLOBS = 3
+_SYMBOL_MAX_BLOBS = 10
+_BLOB_WORK_SIDE = 520       # 分割前把图缩到这个尺寸内，纯 Python 也够快
+_MONTAGE_CELL = 150         # 单格边长，够大模型才看得清笔画走向
 
 
 class ClickCaptchaSolver:
@@ -74,8 +86,17 @@ class ClickCaptchaSolver:
             return []
         main_uri = "data:image/png;base64," + base64.b64encode(main_raw).decode("ascii")
 
-        # 3. 图形题单次识别；文字题用三次结果做一致性裁决，降低偶发误点风险
+        # 3. 文字点选题优先走「切图定坐标 + 模型只认形状」：坐标由连通域算出，
+        #    模型只回答第几号，彻底避开它对小字形定位不准的问题（实测同一张图
+        #    直接问坐标，三个点里有一个偏了 167px，够点空）。
+        coords: List[Tuple[int, int]] = []
         if targets:
+            coords = self._solve_by_symbols(main_raw, targets)
+            if len(coords) < len(targets):
+                logger.info("符号分割法未给出完整答案，回退坐标直读路径")
+
+        # 4. 回退路径：图形题单次识别；文字题用三次结果做一致性裁决
+        if targets and len(coords) < len(targets):
             samples = []
             for sample_index in range(_TEXT_REFERENCE_SAMPLE_COUNT):
                 sample = self._find_all_icons(
@@ -99,7 +120,7 @@ class ClickCaptchaSolver:
                 main_height,
             )
             coords = self._refine_text_coordinates(main_raw, coords)
-        else:
+        elif not targets:
             coords = self._find_all_icons(
                 icon_uris,
                 main_uri,
@@ -120,6 +141,117 @@ class ClickCaptchaSolver:
         if not reference_text:
             return []
         return re.findall(r"[\u3400-\u9fff]|[A-Za-z0-9]+", reference_text)[:3]
+
+    def _solve_by_symbols(self, main_raw: bytes,
+                          targets: List[str]) -> List[Tuple[int, int]]:
+        """先切符号再让模型选编号，完全不依赖模型输出坐标。
+
+        直接把整图丢给模型问坐标时，它对小字形的定位误差能到上百像素——实测
+        一张 338×247 的点选题，三个目标里有一个偏了 167px，点下去就是空的，
+        而「确定」要三次都点中才会点亮，于是整轮验证从来没有提交过。
+        这里改用连通域把画面里的黑色线描符号切出来（坐标是算出来的，精确到
+        像素），再拼成带编号的图让模型只回答「第几号」。模型不再输出任何坐标，
+        定位误差这个误差源就消失了，调用次数也从三次采样降到一到两轮。
+        """
+        try:
+            image = Image.open(io.BytesIO(main_raw)).convert("RGB")
+        except Exception:
+            return []
+
+        boxes = _symbol_boxes(image)
+        need = max(_SYMBOL_MIN_BLOBS, len(targets))
+        if len(boxes) < need or len(boxes) > _SYMBOL_MAX_BLOBS:
+            logger.info(
+                "符号分割：候选 %s 个（需要 %s~%s），改走坐标直读",
+                len(boxes), need, _SYMBOL_MAX_BLOBS,
+            )
+            return []
+
+        montage = _build_symbol_montage(image, boxes)
+        if montage is None:
+            return []
+
+        picks = self._ask_symbol_picks(montage, targets, len(boxes))
+        if len(picks) != len(targets):
+            return []
+
+        coords: List[Tuple[int, int]] = []
+        for pick in picks:
+            if not 0 <= pick < len(boxes):
+                return []
+            box = boxes[pick]
+            coords.append((int(box["cx"]), int(box["cy"])))
+        logger.info("符号分割选号: 目标=%s 编号=%s 坐标=%s", targets, picks, coords)
+        return coords
+
+    def _ask_symbol_picks(self, montage: Image.Image, targets: List[str],
+                          count: int) -> List[int]:
+        """让模型在带编号的符号拼图里选出目标，返回编号列表。
+
+        单次采样偶尔会把形近的两个字符（比如 1 和 8）顺序对调，所以问两轮：
+        两轮一致直接采用，不一致再问一轮取多数，仍无多数就放弃本轮、让上层换图。
+        """
+        buffer = io.BytesIO()
+        montage.save(buffer, format="PNG")
+        uri = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+        prompt = (
+            f"这是从验证码图片里裁出来的 {count} 个符号，每格左上角标了编号（#0、#1 …）。\n"
+            f"需要按顺序点击的字符是：{'、'.join(targets)}。\n"
+            "这些字符是黑色线描的空心字形，画面里通常还混着干扰符号（猫脸、书本等），"
+            "干扰符号不能选。\n"
+            "请按要求的顺序，给出每个字符所在格子的编号（从 0 开始，对应 #号）。\n"
+            # 别在这里写 [0, 1, 2] 这类顺序示例：模型会顺着示例去挑前几个格子。
+            f'只输出 JSON，形如 {{"picks": [2, 0, 1]}}，方括号里按顺序填 {len(targets)} 个编号，'
+            f"编号互不相同且都在 0~{count - 1} 之间。"
+        )
+
+        votes: List[List[int]] = []
+        for _ in range(3):
+            picks = self._request_picks(uri, prompt, count, len(targets))
+            if not picks:
+                continue
+            votes.append(picks)
+            if votes.count(picks) >= 2:
+                return picks
+
+        if len(votes) == 1:
+            # 只成功问了一轮（免费档很容易 429），有答案总比直接放弃强
+            logger.info("符号选号：仅一轮有效结果，直接采用")
+            return votes[0]
+        if len(votes) >= 2:
+            logger.warning("符号选号：多轮结果不一致 %s，放弃本轮", votes)
+        return []
+
+    def _request_picks(self, uri: str, prompt: str, count: int,
+                       expected: int) -> List[int]:
+        """问一轮编号，遇到限流退避重试。"""
+        for attempt in range(3):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system",
+                         "content": "Output valid JSON only. No markdown, no explanation."},
+                        {"role": "user", "content": [
+                            {"type": "image_url", "image_url": {"url": uri}},
+                            {"type": "text", "text": prompt},
+                        ]},
+                    ],
+                    max_tokens=512,
+                    response_format={"type": "json_object"},
+                    extra_body=thinking_extra_body() or None,
+                )
+                output = response.choices[0].message.content or ""
+                logger.info("符号选号响应: %s", output[:200])
+                return _parse_picks(output, count, expected)
+            except Exception as error:
+                logger.warning("符号选号模型调用失败(%s/3): %s", attempt + 1, error)
+                if attempt == 2:
+                    return []
+                # 免费档模型会对并发/频率直接回 429，退避后重试通常就过
+                time.sleep(3.0 * (attempt + 1))
+        return []
 
     @staticmethod
     def _select_consensus_coordinates(
@@ -396,3 +528,164 @@ class ClickCaptchaSolver:
             else:
                 result.append((round(x), round(y)))
         return result
+
+
+# ═══════════════════════════════════════════════════════════
+# 符号分割：把黑色线描符号切成独立块，坐标由连通域算出
+# ═══════════════════════════════════════════════════════════
+
+def _symbol_boxes(image: Image.Image) -> List[dict]:
+    """找出图中所有黑色线描符号，返回它们的外接框与中心点（原图像素坐标）。
+
+    阈值分割 + 4 邻域连通域，先对掩码做一次 1 像素膨胀，把断开的笔画接上。
+    亮度太高或太低（纯黑照片）时直接返回空，让调用方回退到坐标直读。
+    """
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        return []
+
+    work = image
+    ratio = 1.0
+    if max(width, height) > _BLOB_WORK_SIDE:
+        ratio = _BLOB_WORK_SIDE / float(max(width, height))
+        work = image.resize(
+            (max(1, int(width * ratio)), max(1, int(height * ratio))),
+            Image.LANCZOS,
+        )
+
+    w, h = work.size
+    pixels = work.load()
+    dark = set()
+    for y in range(h):
+        for x in range(w):
+            r, g, b = pixels[x, y][:3]
+            if max(r, g, b) <= _MASK_MAX_CHANNEL and (r + g + b) // 3 <= _MASK_MAX_MEAN:
+                dark.add((x, y))
+
+    if not dark:
+        return []
+    # 大面积暗色说明底图本身就是深色照片，阈值切不出符号，别硬凑候选。
+    if len(dark) > w * h * 0.35:
+        logger.info("符号分割：暗像素占 %.0f%%，底图过暗，放弃分割",
+                    len(dark) * 100.0 / (w * h))
+        return []
+
+    mask = set(dark)
+    for x, y in dark:
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                mask.add((x + dx, y + dy))
+
+    boxes = []
+    remaining = set(mask)
+    while remaining:
+        seed = remaining.pop()
+        stack = [seed]
+        blob = [seed]
+        while stack:
+            x, y = stack.pop()
+            for neighbor in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if neighbor in remaining:
+                    remaining.discard(neighbor)
+                    stack.append(neighbor)
+                    blob.append(neighbor)
+
+        core = [point for point in blob if point in dark]
+        if len(core) < _SYMBOL_MIN_AREA:
+            continue
+        xs = [point[0] for point in core]
+        ys = [point[1] for point in core]
+        box_w = max(xs) - min(xs)
+        box_h = max(ys) - min(ys)
+        if box_w < _SYMBOL_MIN_SIDE or box_h < _SYMBOL_MIN_SIDE:
+            continue
+        # 面积占满整图的块是背景，不是符号
+        if box_w * box_h > w * h * 0.6:
+            continue
+        boxes.append({
+            "x0": min(xs), "y0": min(ys), "x1": max(xs), "y1": max(ys),
+            "cx": (min(xs) + max(xs)) // 2,
+            "cy": (min(ys) + max(ys)) // 2,
+            "area": len(core),
+        })
+
+    if not boxes:
+        return []
+
+    # 按阅读顺序（先分行、再按 x）编号，让编号看起来稳定
+    band = max(18, h // 6)
+    boxes.sort(key=lambda box: (box["cy"] // band, box["cx"]))
+
+    # 换算回原图坐标
+    if ratio != 1.0:
+        for box in boxes:
+            for key in ("x0", "y0", "x1", "y1", "cx", "cy"):
+                box[key] = int(round(box[key] / ratio))
+    return boxes
+
+
+def _build_symbol_montage(image: Image.Image, boxes: List[dict]) -> Optional[Image.Image]:
+    """把每个符号裁出来拼成一张带编号的图，供模型比对。"""
+    if not boxes:
+        return None
+
+    pad = max(3, int(max(image.size) * 0.02))
+    cols = min(len(boxes), 6)
+    rows = (len(boxes) + cols - 1) // cols
+    cell = _MONTAGE_CELL
+    label_height = 22
+    canvas = Image.new("RGB", (cols * cell, rows * (cell + label_height)), (255, 255, 255))
+    draw = ImageDraw.Draw(canvas)
+
+    for index, box in enumerate(boxes):
+        left = max(0, box["x0"] - pad)
+        top = max(0, box["y0"] - pad)
+        right = min(image.width, box["x1"] + pad)
+        bottom = min(image.height, box["y1"] + pad)
+        if right - left < 2 or bottom - top < 2:
+            continue
+        crop = image.crop((left, top, right, bottom))
+        factor = min((cell - 10) / float(crop.width), (cell - 10) / float(crop.height))
+        crop = crop.resize(
+            (max(1, int(crop.width * factor)), max(1, int(crop.height * factor))),
+            Image.LANCZOS,
+        )
+        offset_x = (index % cols) * cell
+        offset_y = (index // cols) * (cell + label_height)
+        canvas.paste(
+            crop,
+            (offset_x + (cell - crop.width) // 2, offset_y + (cell - crop.height) // 2),
+        )
+        draw.text((offset_x + 4, offset_y + cell + 4), f"#{index}", fill=(0, 0, 0))
+        draw.rectangle(
+            [offset_x, offset_y, offset_x + cell - 1, offset_y + cell - 1],
+            outline=(210, 210, 210),
+        )
+    return canvas
+
+
+def _parse_picks(text: str, count: int, expected: int) -> List[int]:
+    """从模型输出里取出编号列表，并校验可点性。"""
+    if not text:
+        return []
+
+    picks: List[int] = []
+    match = re.search(r'"picks"\s*:\s*\[([^\]]*)\]', text, re.DOTALL)
+    if match:
+        picks = [int(value) for value in re.findall(r"-?\d+", match.group(1))]
+    if not picks:
+        # 回退：整段文本里只出现了少量整数时，按出现顺序取
+        numbers = [int(value) for value in re.findall(r"-?\d+", text)]
+        if len(numbers) <= count:
+            picks = numbers
+
+    if len(picks) != expected:
+        logger.warning("符号选号：返回 %s 个编号，期望 %s 个", len(picks), expected)
+        return []
+    if len(set(picks)) != len(picks):
+        logger.warning("符号选号：编号重复 %s", picks)
+        return []
+    if any(pick < 0 or pick >= count for pick in picks):
+        logger.warning("符号选号：编号越界 %s（候选 %s 个）", picks, count)
+        return []
+    return picks

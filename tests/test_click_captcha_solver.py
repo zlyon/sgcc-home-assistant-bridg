@@ -4,7 +4,13 @@ from unittest.mock import Mock, patch
 
 from PIL import Image, ImageDraw
 
-from sgcc_ha_bridge.click_captcha_solver import ClickCaptchaSolver
+from sgcc_ha_bridge.click_captcha_solver import (
+    ClickCaptchaSolver,
+    _MONTAGE_CELL,
+    _build_symbol_montage,
+    _parse_picks,
+    _symbol_boxes,
+)
 
 
 class ClickCaptchaSolverTextReferenceTestCase(unittest.TestCase):
@@ -120,6 +126,115 @@ class ClickCaptchaSolverTextReferenceTestCase(unittest.TestCase):
         prompt = request["messages"][1]["content"][-1]["text"]
         self.assertLess(prompt.index("“爱”"), prompt.index("“诧”"))
         self.assertLess(prompt.index("“诧”"), prompt.index("“畅”"))
+
+
+class SymbolSegmentationTestCase(unittest.TestCase):
+    """符号分割：坐标由连通域算出，模型只回答编号。"""
+
+    @staticmethod
+    def _canvas():
+        """造一张「亮底 + 若干个黑色空心方框 + 一个干扰符号」的假验证码图。"""
+        image = Image.new("RGB", (320, 200), (222, 176, 120))
+        draw = ImageDraw.Draw(image)
+        spots = [(30, 30), (140, 30), (250, 30), (80, 140)]
+        for x, y in spots:
+            draw.rectangle([x, y, x + 24, y + 24], outline=(0, 0, 0), width=3)
+        return image, [(x + 12, y + 12) for x, y in spots]
+
+    def test_boxes_are_found_without_numpy(self):
+        image, centers = self._canvas()
+        boxes = _symbol_boxes(image)
+
+        self.assertEqual(len(boxes), len(centers))
+        found = sorted((box["cx"], box["cy"]) for box in boxes)
+        for (expect_x, expect_y), (got_x, got_y) in zip(sorted(centers), found):
+            self.assertLessEqual(abs(got_x - expect_x), 4)
+            self.assertLessEqual(abs(got_y - expect_y), 4)
+
+    def test_boxes_are_numbered_in_reading_order(self):
+        image, _ = self._canvas()
+        boxes = _symbol_boxes(image)
+
+        # 第一行三个从左到右，最后一个在第二行
+        self.assertLess(boxes[0]["cx"], boxes[1]["cx"])
+        self.assertLess(boxes[1]["cx"], boxes[2]["cx"])
+        self.assertGreater(boxes[3]["cy"], boxes[0]["cy"])
+
+    def test_dark_background_is_rejected(self):
+        image = Image.new("RGB", (200, 120), (12, 12, 12))
+        self.assertEqual(_symbol_boxes(image), [])
+
+    def test_blank_image_yields_no_boxes(self):
+        self.assertEqual(_symbol_boxes(Image.new("RGB", (200, 120), "white")), [])
+
+    def test_montage_has_one_cell_per_symbol(self):
+        image, _ = self._canvas()
+        boxes = _symbol_boxes(image)
+        montage = _build_symbol_montage(image, boxes)
+
+        self.assertIsNotNone(montage)
+        self.assertEqual(montage.width, len(boxes) * _MONTAGE_CELL)
+
+    def test_solver_returns_blob_centers_for_picked_numbers(self):
+        image, centers = self._canvas()
+        boxes = _symbol_boxes(image)
+
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._ask_symbol_picks = Mock(return_value=[2, 0, 1])
+
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        coords = solver._solve_by_symbols(buffer.getvalue(), ["1", "8", "9"])
+
+        self.assertEqual(
+            coords,
+            [(boxes[2]["cx"], boxes[2]["cy"]),
+             (boxes[0]["cx"], boxes[0]["cy"]),
+             (boxes[1]["cx"], boxes[1]["cy"])],
+        )
+
+    def test_solver_gives_up_when_numbers_are_invalid(self):
+        image, _ = self._canvas()
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._ask_symbol_picks = Mock(return_value=[9, 0, 1])
+
+        self.assertEqual(solver._solve_by_symbols(buffer.getvalue(), ["1", "8", "9"]), [])
+
+    def test_solver_skips_when_too_few_symbols(self):
+        image = Image.new("RGB", (200, 120), (222, 176, 120))
+        ImageDraw.Draw(image).rectangle([20, 20, 60, 60], outline=(0, 0, 0), width=3)
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+
+        solver = ClickCaptchaSolver(api_key="test")
+        solver._ask_symbol_picks = Mock(return_value=[0, 0, 0])
+
+        self.assertEqual(solver._solve_by_symbols(buffer.getvalue(), ["1", "8", "9"]), [])
+        solver._ask_symbol_picks.assert_not_called()
+
+
+class SymbolPickParsingTestCase(unittest.TestCase):
+    def test_valid_picks(self):
+        self.assertEqual(_parse_picks('{"picks": [1, 0, 4]}', 5, 3), [1, 0, 4])
+
+    def test_duplicate_picks_are_rejected(self):
+        self.assertEqual(_parse_picks('{"picks": [1, 1, 4]}', 5, 3), [])
+
+    def test_out_of_range_picks_are_rejected(self):
+        self.assertEqual(_parse_picks('{"picks": [1, 0, 7]}', 5, 3), [])
+
+    def test_wrong_count_is_rejected(self):
+        self.assertEqual(_parse_picks('{"picks": [1, 0]}', 5, 3), [])
+
+    def test_text_around_json_is_tolerated(self):
+        raw = '好的，结果是 {"picks": [2, 4, 0]} 完毕'
+        self.assertEqual(_parse_picks(raw, 5, 3), [2, 4, 0])
+
+    def test_empty_output(self):
+        self.assertEqual(_parse_picks("", 5, 3), [])
 
 
 if __name__ == "__main__":
