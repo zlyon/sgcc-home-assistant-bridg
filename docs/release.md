@@ -25,8 +25,8 @@ PR、`main` 分支和 `v*` tag 会触发 `.github/workflows/docker-image.yml`：
 GHCR 使用两个仓库：
 
 ```text
-ghcr.io/maribelhearm/sgcc-home-assistant-bridge
-ghcr.io/maribelhearm/sgcc-home-assistant-bridge-browser
+ghcr.io/zlyon/sgcc-home-assistant-bridge
+ghcr.io/zlyon/sgcc-home-assistant-bridge-browser
 ```
 
 常用 tag：

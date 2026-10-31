@@ -1,6 +1,6 @@
 services:
   sgcc_browser:
-    image: ${SGCC_BROWSER_IMAGE:-ghcr.io/maribelhearm/sgcc-home-assistant-bridge-browser:latest}
+    image: ${SGCC_BROWSER_IMAGE:-ghcr.io/zlyon/sgcc-home-assistant-bridge-browser:latest}
     build:
       context: .
       dockerfile: Dockerfile.browser
@@ -26,7 +26,7 @@ services:
     init: true
 
   sgcc_electricity_app:
-    image: ${SGCC_APP_IMAGE:-ghcr.io/maribelhearm/sgcc-home-assistant-bridge:latest}
+    image: ${SGCC_APP_IMAGE:-ghcr.io/zlyon/sgcc-home-assistant-bridge:latest}
     build:
       context: .
       dockerfile: Dockerfile-for-github-action

@@ -66,16 +66,19 @@ docker compose up -d
 默认 GHCR 镜像：
 
 ```env
-SGCC_APP_IMAGE=ghcr.io/maribelhearm/sgcc-home-assistant-bridge:latest
-SGCC_BROWSER_IMAGE=ghcr.io/maribelhearm/sgcc-home-assistant-bridge-browser:latest
+SGCC_APP_IMAGE=ghcr.io/zlyon/sgcc-home-assistant-bridge:latest
+SGCC_BROWSER_IMAGE=ghcr.io/zlyon/sgcc-home-assistant-bridge-browser:latest
 ```
 
-固定版本可以使用：
+固定版本可以使用 CI 生成的 `sha-` 前缀 tag（取 commit 前 7 位）：
 
 ```env
-SGCC_APP_IMAGE=ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.9
-SGCC_BROWSER_IMAGE=ghcr.io/maribelhearm/sgcc-home-assistant-bridge-browser:v0.1.9
+SGCC_APP_IMAGE=ghcr.io/zlyon/sgcc-home-assistant-bridge:sha-0721562
+SGCC_BROWSER_IMAGE=ghcr.io/zlyon/sgcc-home-assistant-bridge-browser:sha-0721562
 ```
+
+`latest` 只在 `main` 分支构建时更新，`sha-xxxxxxx` 每次构建都会生成，适合固定版本排查。
+版本 tag（如 `v0.1.9`）只在给仓库打 tag 发布时才存在。
 Compose 使用 `browser-service` 时，app/browser 两个镜像建议固定到同一个 tag，避免 app 内 ChromeDriver 与 browser-service Chrome 版本不一致。
 
 browser-service 的 `/status` 会返回镜像 `revision`。主程序每次启动 sidecar 时也会记录
@@ -116,6 +119,11 @@ docker compose up -d
 ```
 
 ### 国内镜像：阿里云 ACR
+
+> 本节只适用于配置了 `ALIYUN_REGISTRY` / `ALIYUN_USERNAME` / `ALIYUN_PASSWORD` 三个
+> secrets 的仓库。本仓库（fork）沿用上游的阿里云推送配置，没有自己的 ACR 命名空间，
+> 因此**不要照抄下面的地址**——那些镜像由上游账号推送，不包含本仓库的修改。
+> 没有配置 secrets 时 CI 会跳过阿里云推送，直接用上面的 GHCR 地址即可。
 
 国内网络访问 GHCR 慢时，Docker Compose 可以把 app 和 browser 两个镜像都换成阿里云 ACR。公开拉取不需要登录：
 
@@ -212,7 +220,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 
 - 当前预构建镜像只发布 `amd64`，所以 `config.yaml` 也先只声明 `amd64`。
 - `config.yaml` 的 `version` 使用 `v0.1.9`，与 GHCR tag 对齐。
-- Add-on/App 使用 GHCR app 镜像：`ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.9`。
+- Add-on/App 使用 GHCR app 镜像：`ghcr.io/zlyon/sgcc-home-assistant-bridge:latest`。
 - Add-on/App 是单容器部署，镜像内已经安装官方 `google-chrome-stable` 和匹配 ChromeDriver；用户不需要在 HAOS、宿主机或 NAS 上另装 Google Chrome。
 - Add-on/App 默认 `SGCC_BROWSER_MODE=browser-service`，入口脚本会启动内嵌 browser manager；Chrome 本体只在抓取/登录时按需启动，任务结束后默认关闭。
 - 已在 HAOS 18.0 / Supervisor 2026.06.2 上验证仓库添加、识别、安装和启动；真实国网登录、LLM 验证码和 MQTT 发布仍建议按自己的账号环境跑一轮。
@@ -557,7 +565,7 @@ Debug bundle 默认写入：
 确认 package visibility 是 Public，然后测试：
 
 ```bash
-docker pull ghcr.io/maribelhearm/sgcc-home-assistant-bridge:latest
+docker pull ghcr.io/zlyon/sgcc-home-assistant-bridge:latest
 ```
 
 国内网络也可以直接拉阿里云 ACR 镜像：

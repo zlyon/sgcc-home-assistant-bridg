@@ -11,7 +11,7 @@ boot: auto
 init: false
 stage: experimental
 legacy: true
-image: "ghcr.io/maribelhearm/sgcc-home-assistant-bridge"
+image: "ghcr.io/zlyon/sgcc-home-assistant-bridge"
 map:
   # - addons:rw
   - config:rw

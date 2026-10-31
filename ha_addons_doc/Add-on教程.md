@@ -157,7 +157,7 @@ canonical MQTT 实体默认使用 `sensor.sgcc_<末四位_稳定摘要>_<key>`�
 ### 安装失败
 
 - 检查 HAOS/Supervisor 能否拉取 GHCR 镜像。
-- 镜像为：`ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.9`
+- 镜像为：`ghcr.io/zlyon/sgcc-home-assistant-bridge:latest`
 - 国内网络如果拉取 GHCR 很慢，可以先确认 HAOS/Supervisor 能访问 GHCR；当前 Add-on 默认使用 GHCR app 镜像。
 
 ### 验证码/登录未通过
