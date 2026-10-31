@@ -40,8 +40,12 @@ from .llm_config import thinking_extra_body
 
 logger = logging.getLogger(__name__)
 
-# 浮层裁剪后的放大倍数。底图里的符号很小，不放大模型容易漏检或认错。
-_OVERLAY_ZOOM = 2.5
+# 底图单独裁出来放大送模型。字符和符号都在这一块里，放大后模型才认得出结构；
+# 整张浮层一起放大会让标题行那几个字符变大变抢眼，实测模型会把它们当成待点符号，
+# 三个 picks 全落到标题行上。所以坐标基准选底图，不选整张浮层。
+_PICTURE_ZOOM = 4.5
+# 底图在浮层内的相对位置（左, 上, 宽, 高），按国网当前版式取值。
+_PICTURE_BAND = (0.05, 0.115, 0.93, 0.675)
 # 标题行单独裁出来再放大：整页里这三个字符只有十几像素高，模型会把「方框+横线」
 # 读成「8」、把「方框+竖线+圆点」读成「山」，于是点错旁边的干扰符号。实测放大 6 倍
 # 后连测三轮坐标完全一致。
@@ -50,6 +54,9 @@ _TITLE_ZOOM = 6.0
 _TITLE_BAND = (0.02, 0.03, 0.70, 0.16)
 # 单张图送模型前的最大边长，避免超出模型侧的大小限制。
 _MAX_SIDE = 1600
+# 「确定」按钮在浮层内的相对位置。按钮不送进模型（底图里根本没有它），
+# 按版式直接取底部居中——问模型只会拿到 [0,0] 之类的空值。
+_CONFIRM_RATIO = (0.5, 0.93)
 # 输出预算。强制思考的模型（如 GLM-5.3-Flash）把推理 token 也算在输出里，
 # 2048 容易被推理吃光而留下空正文，这里放宽到 4096；按实际输出计费，不设成本的
 # 模型不会因此多花钱。若换用推理很长的模型仍返回空内容，可再上调。
@@ -59,8 +66,8 @@ _SYSTEM_PROMPT = (
     "你是图形验证码识别器。只输出一个 JSON 对象，不要 markdown、不要解释。"
 )
 
-_USER_PROMPT = """图1 是验证码浮层的放大截图，尺寸 {w}x{h} 像素，包含标题提示行、大图区（散落多个黑色描边符号）、底部按钮。
-图2 是标题提示行的放大图，只显示「请依次点击：」后面的目标符号，清晰得多，请以图2 为准读取目标。
+_USER_PROMPT = """图1 是验证码底图的放大截图，尺寸 {w}x{h} 像素，画面里叠加了若干个黑色描边的人造符号，其余是 AI 生成的背景（沙地、树木、云朵等）。
+图2 是题面「请依次点击：」后面那几个目标字符的放大图，请以图2 为准读取目标。
 
 【最重要的一条规则】全程禁止给符号起名字，禁止猜测它是哪个数字或汉字。
 这些符号是 AI 生成的变形字形，按常见字符去套必然出错。你只能描述**几何结构**：
@@ -73,11 +80,13 @@ _USER_PROMPT = """图1 是验证码浮层的放大截图，尺寸 {w}x{h} 像素
 
 第一步（读要求）：只看图2，逐个写出目标符号的结构描述（严禁出现"8"、"日"、"山"、"B" 这类字符名）。
 
-第二步（全部枚举）：看整张图1 中间那片大图区域，把**所有**叠加的黑色描边符号逐个找出来并给出坐标（坐标按整张图1 算，不是按图片区域算）。注意：
+第二步（全部枚举）：看图1，把**所有**叠加的黑色描边符号逐个找出来并给出坐标（坐标按整张图1 算）。注意：
 - 这些符号是描边线条，不是照片里的实物，别把动物、树木、云朵当符号；
 - 干扰符号（笑脸最常见）也要枚举出来并给坐标，不要跳过；
 - 一般有 4~6 个，容易漏掉贴近画面边缘或被物体挡住的那个；
-- 每个符号只记中心点，并用同样格式给出结构描述。
+- 每个符号只记中心点，并用同样格式给出结构描述；
+- **每个 symbol 都必须带 x 和 y，都是 0~1 之间的小数**。写不出坐标的项不要列进
+  symbols，否则 picks 会指到空位置，整轮作答作废。
 
 第三步（逐一匹配）：按结构描述逐项比对，只允许结构完全吻合的配对，并按顺序写出**选中的是第几个符号**（picks，从 0 开始，对应 symbols 数组的下标）。
 「方框内一条横线分成上下两格」与「两个竖直堆叠的闭合圆环」是**不同**符号；
@@ -87,27 +96,26 @@ _USER_PROMPT = """图1 是验证码浮层的放大截图，尺寸 {w}x{h} 像素
 {{
   "has_captcha": true/false,
   "kind": "click" | "none",
-  "instruction": "标题行完整文字",
+  "instruction": "题面完整文字",
   "targets": ["目标1的结构描述", "目标2", "目标3"],
   "symbols": [{{"desc": "符号的结构描述", "x": 0.0, "y": 0.0}}],
-  "picks": [2, 0, 3],
-  "confirm": [0.0, 0.0]
+  "picks": [2, 0, 3]
 }}
 
 坐标规则（必须遵守）：
-- 一律为相对**整张图1**的比例坐标：整张图1（包含顶部标题行、中间大图区、底部按钮和空白边距）
-  的左上角是 (0,0)，右下角是 (1,1)。
-- 严禁以「中间那张图片区域」为基准。图片区域只占图1 的中部，按它算出来的坐标会整体偏移，
-  直接导致点错。
-- 判断方法：图1 最顶边是 (0,0) 那条线，最底边是 (1,1) 那条线。一个符号若在图片区域垂直
-  居中，它的 y 大约就是 0.5。
-- picks 按标题要求的顺序排列，坐标取自 symbols 里对应的那一项，不要另外手写。
+- 一律为相对**图1 整张图**的比例坐标：图1 左上角是 (0,0)，右下角是 (1,1)。
+- 图1 就是底图本身，不含标题行和按钮，符号坐标按它的边界估就行。
+- picks 按题面要求的顺序排列，坐标取自 symbols 里对应的那一项，不要另外手写。
 - 只输出画面里真实存在的位置；不存在的字段给 null。
 - 若 has_captcha 为 false，则 kind 必须是 "none"，其余字段均为 null。
 """
 
-# 探测浮层用的 JS。以「验证语境文案」为主判据，class/id 命名作为兜底：
-# 国网前端改版通常不会改「请依次点击」这几个字，但会改 class 名。
+# 探测浮层用的 JS。判据分三档，按可靠性从高到低：
+#   1. 强文案「请依次点击 / 请点击图片 / 拖动滑块」——只出现在验证码浮层里，
+#      命中就不必再猜 class 或 z-index（国网改版爱改这两样）；
+#   2. 弱文案（安全验证 / 人机验证）+ 高图层，作为兜底；
+#   3. class/id 里带 captcha/verify 的。
+# 同时要求「含图像」且「不含可见输入框」，避免把登录表单本身裁出来送给模型。
 _OVERLAY_JS = """
 const vw = window.innerWidth || document.documentElement.clientWidth;
 const vh = window.innerHeight || document.documentElement.clientHeight;
@@ -123,18 +131,32 @@ const visible = (el) => {
         && Number(style.opacity || 1) > 0.1;
 };
 
-// 登录表单本身也可能居中、含 logo 图片并出现「验证码」字样，必须排除，
-// 否则会把正常表单误判成浮层，裁出来的图交给模型就是白跑一次。
-const looksLikeLoginForm = (el) => {
-    if (el.querySelector('input[type=password], input[type=tel], input[type=text], input[type=number], textarea')) return true;
-    const idOrClass = ((el.id || '') + ' ' + (el.className || '')).toLowerCase();
-    return /login|signin|account|form|panel|qr_code/.test(idOrClass);
+// 登录表单自带手机号/密码框，浮层没有。只看「可见的」输入框：有些验证码组件
+// 会在隐藏节点里放 input，用标签数量判定会把浮层一起排掉。
+const hasVisibleInput = (el) => {
+    for (const input of el.querySelectorAll('input, textarea, select')) {
+        const rect = input.getBoundingClientRect();
+        const style = window.getComputedStyle(input);
+        if (rect.width > 20 && rect.height > 10
+            && style.display !== 'none' && style.visibility !== 'hidden'
+            && Number(style.opacity || 1) > 0.1) {
+            return true;
+        }
+    }
+    return false;
 };
 
-const looksLikeCaptcha = (el) => {
-    const text = (el.innerText || '').replace(/\\s+/g, '');
-    return /依次点击|请点击图片|请点击下方|安全验证|人机验证|拖动滑块|拖动下方|完成拼图|滑动验证/.test(text);
-};
+const textOf = (el) => (el.innerText || '').replace(/\\s+/g, '');
+
+const strongText = (el) =>
+    /依次点击|请点击图片|请点击下方|完成拼图|拖动滑块|拖动下方/.test(textOf(el));
+
+const weakText = (el) =>
+    /安全验证|人机验证|滑动验证/.test(textOf(el));
+
+// 浮层根节点一定同时含底图和「确定」。靠这一点把外层容器（它也会继承同一段
+// 文案）排除掉，否则裁出来的图多一圈边距，模型给的相对坐标会整体偏移。
+const hasConfirm = (el) => /确定|确认/.test(textOf(el)) && !!el.querySelector('button, a, div, span');
 
 const hasMedia = (el) => {
     if (el.querySelector('canvas, img, svg, video')) return true;
@@ -162,17 +184,44 @@ const limit = vw * vh * 0.85;
 const hits = [];
 for (const el of document.querySelectorAll('div, section, dialog')) {
     if (el === document.body || el === document.documentElement) continue;
-    if (!visible(el) || !hasMedia(el) || looksLikeLoginForm(el) || !highLayer(el)) continue;
-    if (!looksLikeCaptcha(el) && !namedCaptcha(el)) continue;
+    if (!visible(el) || !hasMedia(el) || hasVisibleInput(el)) continue;
+
+    const strong = strongText(el);
+    const idOrClass = ((el.id || '') + ' ' + (el.className || '')).toLowerCase();
+
+    if (!strong) {
+        if (!highLayer(el)) continue;
+        if (/login|signin|account|panel|qr_code/.test(idOrClass)) continue;
+        if (!weakText(el) && !namedCaptcha(el)) continue;
+    }
+
     const rect = el.getBoundingClientRect();
     const area = rect.width * rect.height;
     if (area > limit) continue;
     hits.push({
         x: rect.left, y: rect.top, w: rect.width, h: rect.height, area: area,
         cx: rect.left + rect.width / 2,
+        strong: strong,
+        confirm: hasConfirm(el),
     });
 }
 if (!hits.length) return null;
+
+// 强文案会被外层容器一并继承，所以这里取「同时含强文案和确定按钮」里面积最小的
+// 那个——它就是浮层根节点本身，裁出来刚好是标题行 + 底图 + 按钮。
+const complete = hits.filter((h) => h.strong && h.confirm);
+if (complete.length) {
+    complete.sort((a, b) => a.area - b.area);
+    const best = complete[0];
+    return {x: best.x, y: best.y, w: best.w, h: best.h};
+}
+
+const strongHits = hits.filter((h) => h.strong);
+if (strongHits.length) {
+    strongHits.sort((a, b) => b.area - a.area);
+    const best = strongHits[0];
+    return {x: best.x, y: best.y, w: best.w, h: best.h};
+}
 
 // 优先取居中的（浮层几乎总是居中）；同组里取面积最大的，也就是包含标题行、
 // 图片区和底部按钮的最外层框，裁出来的图才完整。
@@ -213,6 +262,47 @@ def overlay_present(driver) -> bool:
     return overlay_box(driver) is not None
 
 
+def _page_captcha_hint(driver) -> str:
+    """只摘出验证语境的那几个字，避免把手机号之类的页面文本带进日志。"""
+    try:
+        hint = driver.execute_script("""
+            const text = ((document.body && document.body.innerText) || '')
+                .replace(/\\s+/g, '');
+            const match = text.match(/依次点击.{0,12}|请点击图片.{0,8}|安全验证|人机验证|拖动滑块/);
+            return match ? match[0] : '';
+        """)
+        return str(hint or "")[:60]
+    except Exception:
+        return ""
+
+
+def _debug_dump(png: Optional[bytes], label: str) -> None:
+    """把送进模型的图存一份，仅在 SGCC_OVERLAY_DEBUG 打开时生效。
+
+    浮层识别失败时，光看日志分不清是「没找到浮层」还是「裁歪了/模型看错了」，
+    留一张原图能省掉一轮盲猜。
+    """
+    if not png or not _env_flag("SGCC_OVERLAY_DEBUG"):
+        return
+    try:
+        directory = os.path.join(const.get_data_dir(), "debug")
+        os.makedirs(directory, exist_ok=True)
+        path = os.path.join(
+            directory,
+            f"overlay-{label}-{time.strftime('%Y%m%d_%H%M%S')}.png",
+        )
+        with open(path, "wb") as handle:
+            handle.write(png)
+        logger.info("通用验证码：调试图片已保存 %s", path)
+    except Exception as error:
+        logger.debug("通用验证码：调试图片保存失败（%s）", error)
+
+
+def _env_flag(name: str) -> bool:
+    value = (os.getenv(name) or "").strip().lower()
+    return value in {"1", "true", "yes", "y", "on"}
+
+
 def solve_overlay_captcha(
     driver,
     max_attempts: Optional[int] = None,
@@ -230,7 +320,15 @@ def solve_overlay_captcha(
     for attempt in range(1, attempts + 1):
         box = overlay_box(driver)
         if box is None:
-            logger.info("通用验证码：当前没有需要处理的浮层")
+            hint = _page_captcha_hint(driver)
+            if hint:
+                logger.warning(
+                    "通用验证码：页面含验证文案(%s)，但没定位到浮层容器；"
+                    "若反复出现，说明探测规则要跟着国网改版更新",
+                    hint,
+                )
+            else:
+                logger.info("通用验证码：当前没有需要处理的浮层")
             return True
 
         logger.info(
@@ -244,18 +342,16 @@ def solve_overlay_captcha(
             logger.warning("通用验证码：截图失败")
             return False
 
-        overlay_png = _crop(
-            screenshot, dpr,
-            box["x"], box["y"], box["w"], box["h"],
-            _OVERLAY_ZOOM,
-        )
+        picture_png = _crop_picture(screenshot, box, dpr)
         title_png = _crop_title(screenshot, box, dpr)
-        if overlay_png is None:
-            logger.warning("通用验证码：浮层裁剪失败")
+        if picture_png is None:
+            logger.warning("通用验证码：底图裁剪失败")
             return False
+        _debug_dump(picture_png, f"picture-a{attempt}")
+        _debug_dump(title_png, f"title-a{attempt}")
 
         try:
-            plan = _ask_model(overlay_png, title_png)
+            plan = _ask_model(picture_png, title_png)
         except Exception as error:
             logger.error("通用验证码：模型调用失败（%s: %s）", type(error).__name__, error)
             return False
@@ -280,12 +376,9 @@ def solve_overlay_captcha(
             _click(driver, x, y)
             time.sleep(0.35)
 
-        confirm = _ratio_point(plan.get("confirm"), box)
-        if confirm:
-            logger.info("通用验证码：点击确定 (%.0f, %.0f)", confirm[0], confirm[1])
-            _click(driver, confirm[0], confirm[1])
-        else:
-            logger.info("通用验证码：模型未给出确定按钮位置，跳过")
+        confirm = _confirm_point(box)
+        logger.info("通用验证码：点击确定 (%.0f, %.0f)", confirm[0], confirm[1])
+        _click(driver, confirm[0], confirm[1])
 
         time.sleep(settle_seconds)
         if not overlay_present(driver):
@@ -338,6 +431,21 @@ def _crop(image, dpr, left, top, width, height, zoom):
     buffer = io.BytesIO()
     region.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
+
+
+def _crop_picture(image, box, dpr):
+    """把浮层中间的底图单独裁出来放大，作为模型的主图（坐标基准）。"""
+    if box["w"] <= 0 or box["h"] <= 0:
+        return None
+    rx, ry, rw, rh = _PICTURE_BAND
+    return _crop(
+        image, dpr,
+        box["x"] + box["w"] * rx,
+        box["y"] + box["h"] * ry,
+        box["w"] * rw,
+        box["h"] * rh,
+        _PICTURE_ZOOM,
+    )
 
 
 def _crop_title(image, box, dpr):
@@ -422,18 +530,46 @@ def _extra_body() -> dict:
 
 
 
-def _ask_model(overlay_png: bytes, title_png: Optional[bytes]) -> dict:
-    """把浮层截图与标题放大图一起送模型，返回解析后的方案。"""
+def _is_rate_limited(error: Exception) -> bool:
+    status = getattr(error, "status_code", None)
+    if status == 429:
+        return True
+    detail = str(error)
+    return "429" in detail or "RateLimit" in type(error).__name__ or "访问量过大" in detail
+
+
+def _create(client, options: dict, kwargs: dict, retries: int = 2):
+    """按 429 退避重试。免费档视觉模型（如 glm-4.6v-flash）经常限流，
+    遇到就换下一组参数纯属浪费——限流与参数无关，等一会儿再打同一组才对。
+    """
+    last: Optional[Exception] = None
+    for index in range(retries + 1):
+        try:
+            return client.chat.completions.create(**options, **kwargs)
+        except Exception as error:
+            last = error
+            if not _is_rate_limited(error) or index >= retries:
+                raise
+            delay = 2.0 + index * 2.0
+            logger.warning(
+                "通用验证码：模型限流（%s），%.0f 秒后重试", error, delay
+            )
+            time.sleep(delay)
+    raise last  # pragma: no cover
+
+
+def _ask_model(picture_png: bytes, title_png: Optional[bytes]) -> dict:
+    """把底图放大图与标题放大图一起送模型，返回解析后的方案。"""
     from PIL import Image
 
     width, height = 0, 0
     try:
-        with Image.open(io.BytesIO(overlay_png)) as image:
+        with Image.open(io.BytesIO(picture_png)) as image:
             width, height = image.size
     except Exception:
         pass
 
-    content = [_image_part(overlay_png)]
+    content = [_image_part(picture_png)]
     if title_png:
         content.append(_image_part(title_png))
     content.append({
@@ -464,7 +600,7 @@ def _ask_model(overlay_png: bytes, title_png: Optional[bytes]) -> dict:
 
     for options in attempts:
         try:
-            response = client.chat.completions.create(**options, **kwargs)
+            response = _create(client, options, kwargs)
             _log_usage(response)
             return _parse(_content_of(response))
         except Exception as error:
@@ -472,7 +608,7 @@ def _ask_model(overlay_png: bytes, title_png: Optional[bytes]) -> dict:
 
     # 最后一搏：去掉 image_url.detail 与厂商私有开关，只留最朴素的 OpenAI 字段。
     kwargs["messages"][1]["content"] = _without_detail(content)
-    response = client.chat.completions.create(**kwargs)
+    response = _create(client, {}, kwargs)
     _log_usage(response)
     return _parse(_content_of(response))
 
@@ -534,6 +670,8 @@ def _plan_to_page_points(plan: dict, box: dict) -> list[tuple[float, float]]:
     优先用 ``picks``（选中符号的下标）去 ``symbols`` 里取坐标：模型直接手写坐标时
     偶发把 x 写反（0.09 写成 0.89），而它枚举符号本身的定位是准的，用下标反查能
     把「选对符号」和「写对坐标」这两件事解耦。
+
+    模型看的是底图裁剪图，所以比例坐标要先乘回底图在浮层里的位置，再落到页面上。
     """
     symbols = plan.get("symbols") or []
     picks = plan.get("picks")
@@ -545,7 +683,18 @@ def _plan_to_page_points(plan: dict, box: dict) -> list[tuple[float, float]]:
                 item = symbols[int(index)]
             except (IndexError, TypeError, ValueError):
                 continue
-            point = _ratio_point([item.get("x"), item.get("y")], box)
+            if not _has_point(item):
+                logger.info(
+                    "通用验证码：picks[%s] 没有坐标，已忽略（%s）",
+                    index,
+                    (item or {}).get("desc") if isinstance(item, dict) else item,
+                )
+                continue
+            point = _ratio_point(
+                [item.get("x"), item.get("y")],
+                box,
+                _PICTURE_BAND,
+            )
             if point:
                 points.append(point)
         if points:
@@ -553,14 +702,44 @@ def _plan_to_page_points(plan: dict, box: dict) -> list[tuple[float, float]]:
 
     # 回退：模型直接给了 clicks 就用它
     for entry in plan.get("clicks") or []:
-        point = _ratio_point(entry, box)
+        point = _ratio_point(entry, box, _PICTURE_BAND)
         if point:
             points.append(point)
     return points
 
 
-def _ratio_point(value, box: dict) -> Optional[tuple[float, float]]:
-    """把「相对浮层裁剪图」的比例坐标换算成页面 CSS 坐标。"""
+def _has_point(item) -> bool:
+    """symbol 是否带了可用的比例坐标（模型偶尔只给描述不给坐标）。"""
+    if not isinstance(item, dict):
+        return False
+    for key in ("x", "y"):
+        try:
+            float(item.get(key))
+        except (TypeError, ValueError):
+            return False
+    return True
+
+
+def _confirm_point(box: dict) -> tuple[float, float]:
+    """「确定」按钮的页面坐标，按国网浮层的固定版式取底部居中。
+
+    按钮不在送进模型的底图里，问模型只会拿到 ``[0, 0]`` 这类空值——而 0/0 是合法
+    比例坐标，直接用就会点到浮层左上角的标题行，浮层纹丝不动，整轮解算白跑。
+    """
+    rx, ry = _CONFIRM_RATIO
+    return box["x"] + rx * box["w"], box["y"] + ry * box["h"]
+
+
+def _ratio_point(
+    value,
+    box: dict,
+    band: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
+) -> Optional[tuple[float, float]]:
+    """把裁剪图上的比例坐标换算成页面 CSS 坐标。
+
+    ``band`` 是这块裁剪图在浮层内的相对位置 (左, 上, 宽, 高)；默认整张浮层，
+    传 ``_PICTURE_BAND`` 就是底图。
+    """
     if not isinstance(value, (list, tuple)) or len(value) < 2:
         return None
     try:
@@ -569,8 +748,11 @@ def _ratio_point(value, box: dict) -> Optional[tuple[float, float]]:
         return None
     if not (0.0 <= rx <= 1.0 and 0.0 <= ry <= 1.0):
         return None
-    # 裁剪图是浮层按 zoom 放大后的结果，比例坐标乘回浮层尺寸即可回到页面坐标
-    return box["x"] + rx * box["w"], box["y"] + ry * box["h"]
+    bx, by, bw, bh = band
+    return (
+        box["x"] + (bx + rx * bw) * box["w"],
+        box["y"] + (by + ry * bh) * box["h"],
+    )
 
 
 def _click(driver, x: float, y: float) -> None:

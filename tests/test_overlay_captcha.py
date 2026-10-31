@@ -11,6 +11,15 @@ from sgcc_ha_bridge import overlay_captcha as oc
 BOX = {"x": 455.0, "y": 158.0, "w": 390.0, "h": 430.0}
 
 
+def expect_on_page(rx, ry):
+    """底图比例坐标 → 页面坐标（底图在浮层里只占一块，换算要带上这块的偏移）。"""
+    bx, by, bw, bh = oc._PICTURE_BAND
+    return (
+        BOX["x"] + (bx + rx * bw) * BOX["w"],
+        BOX["y"] + (by + ry * bh) * BOX["h"],
+    )
+
+
 class RatioPointTestCase(unittest.TestCase):
     def test_corners_map_to_overlay_corners(self):
         self.assertEqual(oc._ratio_point([0, 0], BOX), (455.0, 158.0))
@@ -42,9 +51,9 @@ class PlanToPointsTestCase(unittest.TestCase):
         self.assertEqual(
             points,
             [
-                (455.0 + 0.10 * 390, 158.0 + 0.66 * 430),
-                (455.0 + 0.80 * 390, 158.0 + 0.46 * 430),
-                (455.0 + 0.70 * 390, 158.0 + 0.56 * 430),
+                expect_on_page(0.10, 0.66),
+                expect_on_page(0.80, 0.46),
+                expect_on_page(0.70, 0.56),
             ],
         )
 
@@ -56,17 +65,17 @@ class PlanToPointsTestCase(unittest.TestCase):
         points = oc._plan_to_page_points(plan, BOX)
         self.assertEqual(
             points,
-            [(455.0 + 0.3 * 390, 158.0 + 0.3 * 430),
-             (455.0 + 0.1 * 390, 158.0 + 0.1 * 430),
-             (455.0 + 0.2 * 390, 158.0 + 0.2 * 430)],
+            [expect_on_page(0.3, 0.3),
+             expect_on_page(0.1, 0.1),
+             expect_on_page(0.2, 0.2)],
         )
 
     def test_falls_back_to_clicks_without_picks(self):
         plan = {"clicks": [[0.2, 0.3], [0.4, 0.5]]}
         self.assertEqual(
             oc._plan_to_page_points(plan, BOX),
-            [(455.0 + 0.2 * 390, 158.0 + 0.3 * 430),
-             (455.0 + 0.4 * 390, 158.0 + 0.5 * 430)],
+            [expect_on_page(0.2, 0.3),
+             expect_on_page(0.4, 0.5)],
         )
 
     def test_invalid_clicks_are_dropped(self):
@@ -134,7 +143,7 @@ class PromptTestCase(unittest.TestCase):
         self.assertIn("禁止给符号起名字", self.prompt)
 
     def test_warns_against_image_area_origin(self):
-        self.assertIn("严禁以「中间那张图片区域」为基准", self.prompt)
+        self.assertIn("图1 就是底图本身，不含标题行和按钮", self.prompt)
 
     def test_requires_pick_index(self):
         self.assertIn("picks", self.prompt)

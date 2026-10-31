@@ -157,7 +157,10 @@ class SgccLogin:
             # 点击登录按钮
             self._click_button(driver, By.CLASS_NAME, "el-button.el-button--primary")
             self._record_debug_event("password_submitted", capture_browser=True)
-            time.sleep(self.config.RETRY_WAIT_TIME_OFFSET_UNIT * 2)
+            # 只等页面开始响应，不能像原来那样固定 20 秒：国网在提交后会立刻弹出
+            # 「请依次点击」图形点选浮层，浮层摆着不动的时间越长，服务端越容易
+            # 直接返回 RK001（网络连接超时），所以这里必须尽快接手验证。
+            time.sleep(2.0)
             logging.info("已点击登录按钮。\r")
 
             # 快速检查：如果已经跳转离开登录页，说明无需验证码，直接成功
@@ -168,9 +171,10 @@ class SgccLogin:
             # 会出现点击登录直接失败（账号被限制登录）
             error = self._get_error_message(driver, "//div[@class='errmsg-tip']//span")
             if error is None:
-                # 处理腾讯点击验证码
+                # 验证码可能是腾讯 tcaptcha，也可能是国网自研的点选浮层，
+                # 必须先判类型再选解算器，不能再默认走腾讯那套选择器。
                 self._record_debug_event("password_captcha_started")
-                captcha_passed = solve_captcha_in_browser(driver, max_retries=self.config.RETRY_TIMES_LIMIT)
+                captcha_passed = self._solve_post_submit_captcha(driver, stage="password")
                 self._record_debug_event(
                     "password_captcha_finished",
                     capture_browser=True,
@@ -496,14 +500,20 @@ class SgccLogin:
         finally:
             driver.implicitly_wait(self.config.DRIVER_IMPLICITY_WAIT_TIME)  # 恢复隐式等待
 
-    def _wait_for_login_submit_state(self, driver, timeout: int = 15) -> tuple[str, Optional[str]]:
-        """Wait for one decisive result after submitting a login form."""
+    def _wait_for_login_submit_state(self, driver, timeout: float = 15) -> tuple[str, Optional[str]]:
+        """Wait for one decisive result after submitting a login form.
+
+        ``captcha_overlay`` 是国网自研的图形点选浮层，与腾讯 tcaptcha 完全不同，
+        调用方必须用 :func:`solve_overlay_captcha` 处理，不能丢给腾讯那套选择器。
+        """
 
         def observe(d):
             if self.is_logged_in_page(d):
                 return ("authenticated", None)
             if has_captcha_in_browser(d):
                 return ("captcha", None)
+            if overlay_present(d):
+                return ("captcha_overlay", None)
             error = self._get_error_message(d, "//div[@class='errmsg-tip']//span")
             if error:
                 return ("error", error)
@@ -511,7 +521,7 @@ class SgccLogin:
 
         try:
             result = WebDriverWait(driver, timeout).until(observe)
-            if result:
+            if isinstance(result, tuple) and len(result) == 2:
                 return result
         except Exception:
             pass
@@ -520,10 +530,76 @@ class SgccLogin:
             return ("authenticated", None)
         if has_captcha_in_browser(driver):
             return ("captcha", None)
+        if overlay_present(driver):
+            return ("captcha_overlay", None)
         error = self._get_error_message(driver, "//div[@class='errmsg-tip']//span")
         if error:
             return ("error", error)
         return ("unknown", None)
+
+    def _detect_pending_captcha(self, driver, timeout: float = 8.0) -> str:
+        """判定页面上正在等用户处理的验证码类型。
+
+        返回 ``"overlay"``（国网点选浮层）、``"tencent"``（腾讯 tcaptcha）
+        或 ``""``（都没等到）。先做一次即时判定，避免腾讯验证码已经就位时
+        还被国网浮层的等待窗口白拖 8 秒。
+        """
+        deadline = time.monotonic() + max(0.0, timeout)
+        while True:
+            if overlay_present(driver):
+                return "overlay"
+            if has_captcha_in_browser(driver):
+                return "tencent"
+            if time.monotonic() >= deadline:
+                return ""
+            time.sleep(0.4)
+
+    def _solve_post_submit_captcha(self, driver, *, stage: str) -> bool:
+        """提交登录后按实际浮层类型分派解算器。
+
+        「点完登录按钮——浮层弹出——不点验证——服务端超时返回 RK001」就是这条
+        分支原来只认腾讯选择器造成的：国网浮层不在腾讯 DOM 里，识别恒为 False，
+        求解器空转，30 秒后页面报「网络连接超时（RK001）」，被误判成风控。
+        """
+        kind = self._detect_pending_captcha(driver)
+        if kind == "overlay":
+            logging.info("检测到国网图形点选验证浮层，交给视觉模型解算（%s）。", stage)
+            self._record_debug_event(f"{stage}_overlay_captcha_started")
+            passed = solve_overlay_captcha(driver)
+            self._record_debug_event(
+                f"{stage}_overlay_captcha_finished",
+                capture_browser=True,
+                passed=passed,
+            )
+            if not passed:
+                return False
+            # 点选浮层通过后，国网常常紧接着补一道腾讯验证才开始真正的提交，
+            # 这里顺手判一次，免得外层又以为登录卡住。
+            if self._detect_pending_captcha(driver, timeout=3.0) == "tencent":
+                logging.info("点选验证通过后又出现腾讯人机验证，继续解算。")
+                return solve_captcha_in_browser(
+                    driver,
+                    max_retries=self.config.RETRY_TIMES_LIMIT,
+                )
+            return True
+
+        if kind == "tencent":
+            logging.info("检测到腾讯人机验证，交给腾讯解算器（%s）。", stage)
+            self._record_debug_event(f"{stage}_tencent_captcha_started")
+
+        # kind 为空时仍走一次腾讯解算器：验证码偶尔会比预期慢一步渲染，
+        # 它内部自带等待与重试，比直接判失败更稳。
+        passed = solve_captcha_in_browser(
+            driver,
+            max_retries=self.config.RETRY_TIMES_LIMIT,
+        )
+        if kind == "tencent":
+            self._record_debug_event(
+                f"{stage}_tencent_captcha_finished",
+                capture_browser=True,
+                passed=passed,
+            )
+        return passed
 
     def _fallback_login(self, driver, reason: str, methods: Optional[list[str]] = None) -> bool:
         """Try explicitly configured interactive login methods in order."""
@@ -602,12 +678,12 @@ class SgccLogin:
             error=error or "",
         )
 
-        if state == "captcha":
-            logging.info("短信验证码提交后出现腾讯人机验证，开始处理。")
-            self._record_debug_event("phone_code_captcha_started")
-            captcha_passed = solve_captcha_in_browser(
+        if state in {"captcha", "captcha_overlay"}:
+            logging.info("短信验证码提交后出现人机验证（%s），开始处理。", state)
+            self._record_debug_event("phone_code_captcha_started", state=state)
+            captcha_passed = self._solve_post_submit_captcha(
                 driver,
-                max_retries=self.config.RETRY_TIMES_LIMIT,
+                stage="phone_code",
             )
             self._record_debug_event(
                 "phone_code_captcha_finished",
@@ -804,14 +880,23 @@ class SgccLogin:
         tick = 0
         while time.monotonic() < deadline:
             latest = self._phone_code_request_state(driver)
-            if latest["status"] in {"sent", "error"}:
+            # 只有「已发送」是无争议的终局。前端报错必须让位给「浮层还在」：
+            # 国网有时在弹出点选浮层的同一刻就把发码结果标成失败（或者残留上一轮
+            # 的失败信息），先判 error 会让流程掉头就走，永远不去点那三个符号，
+            # 表现出来就是「不点验证、也不发验证码」。
+            if latest["status"] == "sent":
                 return latest
-            if has_captcha_in_browser(driver):
-                return {**latest, "status": "captcha"}
             # 国网自研的点选浮层不是腾讯结构，has_captcha_in_browser 认不出来。
             # 这里每隔 0.4 秒补探一次，命中后交给视觉解算，否则会在 pending 上耗到超时。
             if tick % 2 == 0 and overlay_present(driver):
                 return {**latest, "status": "captcha_generic"}
+            if has_captcha_in_browser(driver):
+                return {**latest, "status": "captcha"}
+            if latest["status"] == "error":
+                # 退出前再确认一次：报错文案与浮层可能同时出现。
+                if overlay_present(driver):
+                    return {**latest, "status": "captcha_generic"}
+                return latest
             tick += 1
             time.sleep(0.2)
         return latest

@@ -233,6 +233,8 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `LLM_API_KEY` | OpenAI 兼容多模态接口 Key；也兼容 `ARK_API_KEY`。 |
 | `LLM_BASE_URL` | OpenAI 兼容接口 Base URL；也兼容 `ARK_BASE_URL`。 |
 | `LLM_MODEL` | 多模态模型名或接入点 ID；也兼容 `ARK_MODEL`。 |
+| `SGCC_OVERLAY_DEBUG` | 设为 `1` 时把送进模型的验证码底图和标题图保存到 `/data/debug/overlay-*.png`，用于确认「没找到浮层」还是「裁歪了/模型看错」。默认关闭。 |
+| `SGCC_OVERLAY_CAPTCHA_ATTEMPTS` | 国网图形点选浮层的解算重试轮次，范围 `1..4`，默认 `2`。 |
 | `LOGIN_FALLBACK` | 旧登录兜底配置；`qrcode` 表示二维码人工扫码。新配置建议使用 `SGCC_LOGIN_FALLBACK_METHODS`。 |
 | `PUBLISHER` | 发布方式：`mqtt`、`rest`、`both`；推荐 `mqtt`。`both` 会同时发布 MQTT Discovery 和 HA REST state。 |
 | `MQTT_HOST` | MQTT broker 地址。 |
@@ -430,6 +432,12 @@ examples/basic/lovelace-sgcc-electricity.yaml
 - Docker / Linux / Xvfb / CDP / browser profile 的整体环境指纹与桌面浏览器不同。
 - 容器和桌面使用不同网络出口、DNS 或 IPv4/IPv6 路径。
 - browser 镜像构建较早，运行中的 Google Chrome 版本与当前桌面浏览器存在差异。
+
+**先分清两种 `RK001`，别急着查指纹。** 国网在密码登录提交后会弹出自研的图形点选浮层，浮层若一直没人点，服务端等到超时就回 `RK001`——这属于「验证未完成」，与服务端主动拒绝长得一样。三处证据足以区分：
+
+1. `/data/errors/login_failed_*` 里的截图：浮层（「请依次点击：…」）是否原样停在那里、一个符号都没点上；
+2. 日志里点完「登录」到报 `RK001` 的间隔：约等于腾讯解算器空转的总时长（`RETRY_TIMES_LIMIT × 每次 15 秒`），说明这段路走错了分派；
+3. 日志里有没有 `通用验证码：识别到非腾讯浮层`、`浮层已消失，解算完成`。完全没有，就是浮层根本没被处理；有却仍报 `RK001`，才是环境指纹方向。
 
 Issue #23 的 2026-07-17 附件显示，Docker 流程已经完成账号密码和腾讯点选验证码，日志明确出现“验证码已通过”，随后才收到 RK001。因此该样本不是验证码识别失败，而是登录提交后的服务端拒绝。两个 app/browser 日志附件内容完全相同，现有 Debug bundle 又没有 Chrome/ChromeDriver 版本、User-Agent、`navigator.webdriver`、platform、languages、timezone、screen 等信息，所以目前**不能证明 Chrome 版本固定或过旧就是根因**。
 
