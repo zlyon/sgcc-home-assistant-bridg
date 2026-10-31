@@ -13,6 +13,7 @@ from selenium.common.exceptions import TimeoutException
 
 from .captcha_selenium import has_captcha_in_browser, solve_captcha_in_browser
 from .login_guard import LoginFailure, classify_login_failure, env_bool
+from .overlay_captcha import overlay_present, solve_overlay_captcha
 from .config import FetcherConfig
 from .const import LOGIN_URL, get_data_dir
 from .error_watcher import ErrorWatcher
@@ -655,6 +656,14 @@ class SgccLogin:
 
     def _request_phone_code(self, driver) -> dict:
         """Click the visible send-code control and require a decisive frontend state."""
+        # 点完「获取验证码」到前端真正请求短信之间，国网要先渲染图形点选浮层、等用户
+        # 点对图形并确认。原来固定等 3 秒，浮层没在这段时间内出现就被判成 pending，
+        # 接着换下一种点击方式再点一次按钮——浮层还挂在那儿，重复点击毫无意义，还会
+        # 加重风控。这里放宽到可配置时长，且一旦探到浮层立即返回，不拖慢正常路径。
+        try:
+            captcha_wait = float(os.getenv("SGCC_CAPTCHA_RENDER_WAIT", "8") or 8)
+        except (TypeError, ValueError):
+            captcha_wait = 8.0
         attempts = (
             (
                 "native",
@@ -690,7 +699,7 @@ class SgccLogin:
                 )
                 continue
 
-            state = self._wait_for_phone_code_request_state(driver, timeout=3.0)
+            state = self._wait_for_phone_code_request_state(driver, timeout=captcha_wait)
             if state["status"] == "sent":
                 logging.info("国网前端已确认短信验证码发送。")
                 return state
@@ -729,6 +738,40 @@ class SgccLogin:
                         state.get("error") or "人机验证通过后短信验证码发送失败",
                     )
 
+            if state["status"] == "captcha_generic":
+                # 国网自研的图形点选浮层。答案只存在于底图里，DOM 读不到，必须交给
+                # 多模态模型：截图裁剪 → 模型给坐标 → CDP 真实点击 → 点确定。
+                logging.info("发送短信验证码前出现图形点选验证，开始视觉解算。")
+                self._record_debug_event("phone_code_request_overlay_captcha_started")
+                passed = solve_overlay_captcha(driver)
+                self._record_debug_event(
+                    "phone_code_request_overlay_captcha_finished",
+                    capture_browser=True,
+                    passed=passed,
+                )
+                if not passed:
+                    # 浮层还在时反复点「获取验证码」只会加重风控，直接交给上层决策
+                    raise LoginFailure(
+                        "captcha_failed",
+                        "发送短信验证码前的图形点选验证未通过",
+                    )
+                state = self._wait_for_phone_code_request_state(
+                    driver,
+                    timeout=10.0,
+                )
+                if state["status"] == "sent":
+                    logging.info("图形验证通过，国网前端已确认短信验证码发送。")
+                    return state
+                if state["status"] == "error":
+                    raise LoginFailure(
+                        "phone_code_request_failed",
+                        state.get("error") or "图形验证通过后短信验证码发送失败",
+                    )
+                raise LoginFailure(
+                    "phone_code_request_failed",
+                    "图形验证已通过但前端未确认短信发送",
+                )
+
             logging.warning(
                 "获取验证码点击后前端未确认发送，准备回退下一点击方式: %s",
                 method,
@@ -758,12 +801,18 @@ class SgccLogin:
     ) -> dict:
         deadline = time.monotonic() + timeout
         latest = {"status": "pending", "auth_time": 0, "error": ""}
+        tick = 0
         while time.monotonic() < deadline:
             latest = self._phone_code_request_state(driver)
             if latest["status"] in {"sent", "error"}:
                 return latest
             if has_captcha_in_browser(driver):
                 return {**latest, "status": "captcha"}
+            # 国网自研的点选浮层不是腾讯结构，has_captcha_in_browser 认不出来。
+            # 这里每隔 0.4 秒补探一次，命中后交给视觉解算，否则会在 pending 上耗到超时。
+            if tick % 2 == 0 and overlay_present(driver):
+                return {**latest, "status": "captcha_generic"}
+            tick += 1
             time.sleep(0.2)
         return latest
 
