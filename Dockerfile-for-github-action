@@ -66,4 +66,16 @@ ENV LANG=C.UTF-8
 ARG VERSION=unknown
 ENV VERSION=${VERSION}
 
+# 构建来源信息。CI 会注入实际值；本地 docker build 不传时保持 unknown，
+# 启动日志里能看出"这份镜像不是 CI 构建的"，避免再去猜镜像从哪来。
+ARG SGCC_REPO_URL=unknown
+ARG SGCC_BUILD_TIME=unknown
+ENV SGCC_REPO_URL=${SGCC_REPO_URL}
+ENV SGCC_BUILD_TIME=${SGCC_BUILD_TIME}
+
+LABEL org.opencontainers.image.revision=${VERSION} \
+      org.opencontainers.image.created=${SGCC_BUILD_TIME} \
+      org.opencontainers.image.source=${SGCC_REPO_URL} \
+      org.opencontainers.image.title="sgcc-home-assistant-bridge"
+
 CMD ["/app/docker-entrypoint.sh"]

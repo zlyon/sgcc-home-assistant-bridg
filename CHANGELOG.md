@@ -10,6 +10,8 @@
 
 ### Added
 
+- 启动日志改为打印真实的构建来源：`当前仓库版本为 <commit>，构建于 <构建时间>，代码仓库为 <仓库地址>`。此前仓库地址是写死的上游字符串，fork 用户重建镜像后日志里仍显示原作者地址，看起来像「还在跑别人的镜像」。现在三项分别来自镜像内的 `VERSION`、`SGCC_BUILD_TIME`、`SGCC_REPO_URL`，由 CI 通过 build-arg 注入，同时写入 `org.opencontainers.image.{revision,created,source}` 三个 OCI label，可以直接用 `docker inspect` 核对。
+- 两个 Dockerfile 都接受 `SGCC_REPO_URL` / `SGCC_BUILD_TIME` 两个 build arg；本地构建不传时日志显示 `unknown`，可据此判断镜像不是 CI 构建的。
 - `click_captcha_solver.py` 新增符号分割三件套：`_symbol_boxes`（阈值分割 + 4 邻域连通域，纯 PIL 实现，不引入 numpy）、`_build_symbol_montage`（把每个符号裁出来拼成带 `#编号` 的对照图）、`_parse_picks`（编号校验：数量、重复、越界）。分割失败（底图过暗、候选数量不合法）时自动回退原有坐标直读路径。
 - 新增 `tests/test_click_captcha_solver.py` 里的 `SymbolSegmentationTestCase` 与 `SymbolPickParsingTestCase`，共 14 个用例，覆盖分割、编号顺序、暗底拒绝、拼图尺寸、编号校验与非法返回，不依赖浏览器和模型。
 

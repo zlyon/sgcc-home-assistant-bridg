@@ -76,7 +76,6 @@ SGCC_BROWSER_IMAGE=ghcr.io/maribelhearm/sgcc-home-assistant-bridge-browser:lates
 SGCC_APP_IMAGE=ghcr.io/maribelhearm/sgcc-home-assistant-bridge:v0.1.9
 SGCC_BROWSER_IMAGE=ghcr.io/maribelhearm/sgcc-home-assistant-bridge-browser:v0.1.9
 ```
-
 Compose 使用 `browser-service` 时，app/browser 两个镜像建议固定到同一个 tag，避免 app 内 ChromeDriver 与 browser-service Chrome 版本不一致。
 
 browser-service 的 `/status` 会返回镜像 `revision`。主程序每次启动 sidecar 时也会记录
@@ -89,6 +88,25 @@ docker inspect sgcc_electricity_arc --format '{{range .Config.Env}}{{println .}}
 
 正式发布的 app/browser 镜像由同一次 CI 构建注入相同的 Git commit SHA。若使用自建镜像，
 应给两个 Dockerfile 传入相同的 `VERSION` build arg。
+
+启动日志里的这行可以直接用来自查镜像来源：
+
+```
+当前仓库版本为 <commit sha>，构建于 <UTC 构建时间>，代码仓库为 <仓库地址>
+```
+
+三项依次来自镜像内的 `VERSION`、`SGCC_BUILD_TIME`、`SGCC_REPO_URL`，由 CI 在构建时写入
+（同时写入同名 OCI label），运行时无法篡改。fork 之后重新构建镜像，这里就应该显示自己的
+仓库地址和新的 commit；若仍然显示上游仓库或旧 commit，说明容器跑的是旧镜像。
+
+`latest` 是可变 tag，本地已有同名镜像时 `docker compose up -d` **不会**自动拉新，必须显式 pull：
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate
+docker inspect sgcc_electricity_arc \
+  --format '{{index .Config.Labels "org.opencontainers.image.revision"}} {{index .Config.Labels "org.opencontainers.image.created"}}'
+```
 
 也可以继续本地构建：
 

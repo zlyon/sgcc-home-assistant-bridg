@@ -119,6 +119,13 @@ jobs:
           echo "ALIYUN_IMAGE_NAME=crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.com/maribelhearm/sgcc_ha" >> "$GITHUB_ENV"
           echo "ALIYUN_BROWSER_IMAGE_NAME=crpi-uqxz2jxgnrieto82.cn-hangzhou.personal.cr.aliyuncs.com/maribelhearm/sgcc_ha" >> "$GITHUB_ENV"
 
+      # 构建来源写进镜像，运行时打到启动日志里。fork 之后如果日志仍显示上游仓库地址，
+      # 说明跑的不是本仓库构建出来的镜像，不用再靠猜。
+      - name: Set build metadata
+        run: |
+          echo "REPO_URL=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
+          echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -154,6 +161,8 @@ jobs:
           platforms: linux/amd64
           build-args: |
             VERSION=${{ github.sha }}
+            SGCC_REPO_URL=${{ env.REPO_URL }}
+            SGCC_BUILD_TIME=${{ env.BUILD_TIME }}
             SGCC_FORCE_DEBUG=${{ startsWith(github.ref, 'refs/heads/dev/') && 'true' || 'false' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-ghcr.outputs.tags }}
@@ -178,6 +187,8 @@ jobs:
           platforms: linux/amd64
           build-args: |
             VERSION=${{ github.sha }}
+            SGCC_REPO_URL=${{ env.REPO_URL }}
+            SGCC_BUILD_TIME=${{ env.BUILD_TIME }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-ghcr-browser.outputs.tags }}
           labels: ${{ steps.meta-ghcr-browser.outputs.labels }}
@@ -211,6 +222,8 @@ jobs:
           platforms: linux/amd64
           build-args: |
             VERSION=${{ github.sha }}
+            SGCC_REPO_URL=${{ env.REPO_URL }}
+            SGCC_BUILD_TIME=${{ env.BUILD_TIME }}
             SGCC_FORCE_DEBUG=${{ startsWith(github.ref, 'refs/heads/dev/') && 'true' || 'false' }}
           push: true
           tags: ${{ steps.meta-aliyun.outputs.tags }}
@@ -237,6 +250,8 @@ jobs:
           platforms: linux/amd64
           build-args: |
             VERSION=${{ github.sha }}
+            SGCC_REPO_URL=${{ env.REPO_URL }}
+            SGCC_BUILD_TIME=${{ env.BUILD_TIME }}
           push: true
           tags: ${{ steps.meta-aliyun-browser.outputs.tags }}
           labels: ${{ steps.meta-aliyun-browser.outputs.labels }}

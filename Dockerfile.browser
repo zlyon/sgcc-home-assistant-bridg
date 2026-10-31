@@ -29,4 +29,14 @@ RUN chmod +x /app/browser-service-entrypoint.sh
 ARG VERSION=unknown
 ENV VERSION=${VERSION}
 
+ARG SGCC_REPO_URL=unknown
+ARG SGCC_BUILD_TIME=unknown
+ENV SGCC_REPO_URL=${SGCC_REPO_URL}
+ENV SGCC_BUILD_TIME=${SGCC_BUILD_TIME}
+
+LABEL org.opencontainers.image.revision=${VERSION} \
+      org.opencontainers.image.created=${SGCC_BUILD_TIME} \
+      org.opencontainers.image.source=${SGCC_REPO_URL} \
+      org.opencontainers.image.title="sgcc-home-assistant-bridge-browser"
+
 CMD ["/app/browser-service-entrypoint.sh"]

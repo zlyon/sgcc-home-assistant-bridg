@@ -271,7 +271,12 @@ def main():
         HASS_URL = os.getenv("HASS_URL")
         JOB_START_TIME = os.getenv("JOB_START_TIME","07:00" )
         LOG_LEVEL = os.getenv("LOG_LEVEL","INFO")
-        VERSION = os.getenv("VERSION")
+        VERSION = (os.getenv("VERSION") or "").strip() or "unknown"
+        # 构建信息由 CI 通过 build-arg 注入。镜像被重新构建过、但 tag 还是
+        # latest 时，光看版本号很难判断手里这份是不是最新代码，把构建时间和
+        # 仓库来源一起打出来，出问题对一眼就知道该不该重新 pull。
+        BUILD_TIME = (os.getenv("SGCC_BUILD_TIME") or "").strip() or "unknown"
+        REPO_URL = (os.getenv("SGCC_REPO_URL") or "").strip() or "unknown"
         RETRY_TIMES_LIMIT = int(os.getenv("RETRY_TIMES_LIMIT", 5))
         REPUBLISH_INTERVAL_MINUTES = int(os.getenv("REPUBLISH_INTERVAL_MINUTES", 15))
         SGCC_DAILY_RUNS = int(os.getenv("SGCC_DAILY_RUNS", "1"))
@@ -282,7 +287,11 @@ def main():
         logging.error(f"读取 .env 文件失败，程序将退出，错误信息: {e}。")
         sys.exit()
 
-    logging.info(f"当前仓库版本为 {VERSION}，仓库地址为 https://github.com/MaribelHearm/sgcc-home-assistant-bridg")
+    # 这里曾经写死后作者仓库地址，导致 fork 用户重建镜像后日志里仍然显示上游地址，
+    # 看起来像「还在跑别人的镜像」。现在改为由 CI 注入真实的构建来源。
+    logging.info(
+        f"当前仓库版本为 {VERSION}，构建于 {BUILD_TIME}，代码仓库为 {REPO_URL}"
+    )
     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     logging.info(f"当前日期为 {current_datetime}。")
 
