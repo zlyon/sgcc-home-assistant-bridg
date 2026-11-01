@@ -16,7 +16,16 @@ from sgcc_ha_bridge.login_interaction import (
 def response(result, status_code=200):
     return SimpleNamespace(
         status_code=status_code,
+        text="",
         json=lambda: {"ok": status_code == 200, "result": result},
+    )
+
+
+def error_response(status_code, text):
+    return SimpleNamespace(
+        status_code=status_code,
+        text=text,
+        json=lambda: {"ok": False},
     )
 
 
@@ -261,6 +270,37 @@ class TelegramLoginInteractionTestCase(unittest.TestCase):
         self.assertTrue(interaction.send_qr_code(b"png", "RK001"))
         self.assertEqual(post.call_count, 2)
         self.assertEqual(post.call_args_list[1].kwargs["timeout"], 45)
+
+    @patch("sgcc_ha_bridge.login_interaction.time.sleep")
+    @patch("sgcc_ha_bridge.login_interaction.requests.post")
+    def test_edge_restricted_ip_is_retried(self, post, sleep):
+        """反代多 A 记录命中受限 IP（403 + 1034）时应当换连接重试，而不是判死。
+
+        真实现场：tgapi 的 4 条 A 记录里有一条恒定返回 1034，导致
+        getUpdates / sendMessage 随机失败，日志里就是几条 HTTP 403。
+        """
+        post.side_effect = [
+            error_response(
+                403,
+                '{"title":"Error 1034: Edge IP Restricted","status":403,'
+                '"detail":"The host resolves to a restricted IP"}',
+            ),
+            response({"message_id": 7}),
+        ]
+        interaction = TelegramLoginInteraction("token", "42")
+
+        self.assertTrue(interaction.send_qr_code(b"png", "RK001"))
+        self.assertEqual(post.call_count, 2)
+
+    @patch("sgcc_ha_bridge.login_interaction.time.sleep")
+    @patch("sgcc_ha_bridge.login_interaction.requests.post")
+    def test_plain_403_is_not_retried(self, post, sleep):
+        """普通 403（如 Token 无效）属于确定性失败，重试只是白等。"""
+        post.return_value = error_response(403, '{"ok":false,"description":"Unauthorized"}')
+        interaction = TelegramLoginInteraction("token", "42")
+
+        self.assertFalse(interaction.send_qr_code(b"png", "RK001"))
+        self.assertEqual(post.call_count, 1)
 
     @patch("sgcc_ha_bridge.login_interaction.time.sleep")
     @patch("sgcc_ha_bridge.login_interaction.requests.post")

@@ -25,7 +25,21 @@ _DEFAULT_SEND_RETRIES = 3
 _POLL_PAYLOAD_TIMEOUT = 10
 # 只重试「请求很可能根本没到达服务器」或「网关临时不可用」的情形；
 # 4xx/409 这类确定性失败直接返回，重试只会白等。
-_RETRYABLE_ERRORS = {"timeout", "connection", "http_502", "http_503", "http_504"}
+#
+# 例外是 edge_blocked：反代域名往往解析到多条 Cloudflare anycast IP，其中个别 IP
+# 会被 CF 拒绝服务（403 + error code 1034 "Edge IP Restricted"）。这是「这台机器
+# 这一次恰好挑到了坏 IP」，换个连接换到别的 IP 就好了，属于可重试。
+_RETRYABLE_ERRORS = {
+    "timeout",
+    "connection",
+    "http_502",
+    "http_503",
+    "http_504",
+    "edge_blocked",
+}
+
+# CF 边缘拒绝服务时的响应指纹（不是 Telegram 返回的，请求压根没到 api.telegram.org）。
+_EDGE_BLOCK_SIGNATURES = ("error code: 1034", "error code: 1010", "edge ip restricted")
 
 # 自建反代挂在 Cloudflare 后面时，默认的 python-requests UA 会被 Bot Fight Mode
 # 直接判成机器人，边缘返回 403 + "error code: 1010"，请求根本到不了 api.telegram.org。
@@ -232,6 +246,9 @@ class TelegramLoginInteraction:
             result = self._post(
                 "getUpdates",
                 timeout=poll_timeout + self.poll_timeout,
+                # 反代多 A 记录时单次命中受限 IP 的概率不低，多给一次机会换条连接，
+                # 避免把「挑到坏 IP」误判成「通道挂了」进而放弃等待验证码。
+                attempts=2,
                 json=payload,
             )
             if result is None:
@@ -360,8 +377,9 @@ class TelegramLoginInteraction:
             if response.status_code == 409:
                 return None, "conflict"
             if response.status_code != 200:
-                # Cloudflare 拦下来时正文是纯文本 "error code: 1010"，
-                # 只打状态码会把「被边缘拦截」误认成「Bot 凭证失效」。
+                # Cloudflare 拦下来时正文是纯文本 "error code: 1010"，或者是一段
+                # JSON（1034 Edge IP Restricted）。只打状态码会把「被边缘拦截」
+                # 误认成「Bot 凭证失效」或「反代挂了」，所以正文也要带上。
                 snippet = (response.text or "").strip().replace("\n", " ")[:200]
                 logging.warning(
                     "Telegram Bot %s 请求失败，HTTP %s，响应=%s",
@@ -369,6 +387,15 @@ class TelegramLoginInteraction:
                     response.status_code,
                     redact_text(snippet) or "-",
                 )
+                lowered = (response.text or "").lower()
+                if any(sig in lowered for sig in _EDGE_BLOCK_SIGNATURES):
+                    # 反代域名有多个 A 记录时，单次命中坏 IP 很常见；
+                    # 交给重试换一条连接即可，不要当成终局失败。
+                    logging.warning(
+                        "Telegram 反代被 Cloudflare 边缘拒绝（多 A 记录里挑到了受限 IP），"
+                        "本次走重试换 IP。"
+                    )
+                    return None, "edge_blocked"
                 return None, f"http_{response.status_code}"
             payload = response.json()
             if not payload.get("ok"):
