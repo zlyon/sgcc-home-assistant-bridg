@@ -274,6 +274,7 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `SGCC_DEBUG` | 完整 Debug 取证模式，默认 `false`；生产解析始终使用相同的轻量 observation，完整 Component/DOM 仅进入诊断取证，因此开启前后抓取和发布结果保持一致。 |
 | `SGCC_DEBUG_DIR` | Debug bundle 目录，默认 `/data/debug`；最新一次固定在 `/data/debug/latest`。 |
 | `SGCC_ERROR_SCREENSHOT` | 错误现场截图开关，默认 `false`；`/data/errors` 默认只保存脱敏 metadata。截图无法自动可靠清除页面可见姓名/地址，开启后需人工检查。 |
+| `SGCC_ERROR_HTML` | 额外保存登录框结构现场（`login_box.html` + `ui-state.json`），默认 `false`。只落 DOM 结构：输入框 value 与图片 base64 会被抹掉，用来判断「浮层有没有弹、选择器还对不对」。 |
 | `SGCC_ERROR_MAX_CAPTURES` | `/data/errors` 最多保留的错误现场目录数，默认 `10`。 |
 | `SGCC_DIAG` | 旧诊断开关兼容别名；设为 `true` 等价于 `SGCC_DEBUG=true`。 |
 | `SGCC_DIAG_DIR` | 旧诊断目录兼容配置；未设置 `SGCC_DEBUG_DIR` 时使用。 |

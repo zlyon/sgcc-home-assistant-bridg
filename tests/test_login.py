@@ -273,10 +273,11 @@ class LoginFallbackTestCase(unittest.TestCase):
         element.is_enabled.return_value = True
         driver = Mock()
         driver.find_elements.return_value = [element]
-        login._wait_for_phone_code_request_state = Mock(side_effect=[
+        login._phone_code_request_state = Mock(side_effect=[
             {"status": "pending", "auth_time": 0, "error": ""},
             {"status": "sent", "auth_time": 58, "error": ""},
         ])
+        login._detect_pending_captcha = Mock(return_value="")
         action_chain = Mock()
         action_chain.move_to_element.return_value = action_chain
         action_chain.pause.return_value = action_chain
@@ -287,11 +288,10 @@ class LoginFallbackTestCase(unittest.TestCase):
 
         self.assertEqual(state["status"], "sent")
         action_chain.perform.assert_called_once()
-        element.click.assert_called_once()
+        element.click.assert_not_called()
         driver.execute_script.assert_not_called()
 
-    @patch("sgcc_ha_bridge.login.solve_captcha_in_browser", return_value=True)
-    def test_phone_code_request_solves_visible_pre_send_captcha(self, solve_captcha):
+    def test_phone_code_request_solves_visible_pre_send_captcha(self):
         login = SgccLogin.__new__(SgccLogin)
         login.diagnostic = Mock()
         login.config = SimpleNamespace(RETRY_TIMES_LIMIT=2)
@@ -300,10 +300,12 @@ class LoginFallbackTestCase(unittest.TestCase):
         element.is_enabled.return_value = True
         driver = Mock()
         driver.find_elements.return_value = [element]
-        login._wait_for_phone_code_request_state = Mock(side_effect=[
-            {"status": "captcha", "auth_time": 0, "error": ""},
-            {"status": "sent", "auth_time": 60, "error": ""},
-        ])
+        login._phone_code_request_state = Mock(return_value={
+            "status": "sent", "auth_time": 60, "error": "",
+        })
+        # 第一次探到腾讯浮层，解完就消失。
+        login._detect_pending_captcha = Mock(side_effect=["tencent", ""])
+        login._solve_post_submit_captcha = Mock(return_value=True)
         action_chain = Mock()
         action_chain.move_to_element.return_value = action_chain
         action_chain.pause.return_value = action_chain
@@ -313,11 +315,41 @@ class LoginFallbackTestCase(unittest.TestCase):
             state = login._request_phone_code(driver)
 
         self.assertEqual(state["status"], "sent")
-        solve_captcha.assert_called_once_with(driver, max_retries=2)
+        login._solve_post_submit_captcha.assert_called_once_with(
+            driver,
+            stage="phone_code_request",
+        )
         login.diagnostic.record_timeline.assert_any_call(
             "login_phone_code_request_captcha_finished",
             passed=True,
         )
+
+    def test_phone_code_request_does_not_trust_sent_while_captcha_visible(self):
+        """前端倒计时已翻牌但浮层还挂着时，不能当成「已发送」。"""
+        login = SgccLogin.__new__(SgccLogin)
+        login.diagnostic = None
+        login.config = SimpleNamespace(RETRY_TIMES_LIMIT=1)
+        element = Mock()
+        element.is_displayed.return_value = True
+        element.is_enabled.return_value = True
+        driver = Mock()
+        driver.find_elements.return_value = [element]
+        login._phone_code_request_state = Mock(return_value={
+            "status": "sent", "auth_time": 60, "error": "",
+        })
+        login._detect_pending_captcha = Mock(return_value="overlay")
+        login._solve_post_submit_captcha = Mock(return_value=True)
+        action_chain = Mock()
+        action_chain.move_to_element.return_value = action_chain
+        action_chain.pause.return_value = action_chain
+        action_chain.click.return_value = action_chain
+
+        with patch("sgcc_ha_bridge.login.ActionChains", return_value=action_chain):
+            with self.assertRaises(LoginFailure) as raised:
+                login._request_phone_code(driver)
+
+        self.assertEqual(raised.exception.category, "captcha_failed")
+        self.assertGreaterEqual(login._solve_post_submit_captcha.call_count, 4)
 
     def test_phone_code_request_failure_does_not_start_telegram_wait(self):
         driver = Mock()
@@ -348,7 +380,7 @@ class LoginFallbackTestCase(unittest.TestCase):
         qr_element = Mock()
         qr_element.get_dom_attribute.return_value = "data:image/png;base64,cG5n"
         qr_element.get_attribute.return_value = "data:image/png;base64,cG5n"
-        wait.return_value.until.side_effect = [Mock(), qr_element, TimeoutException()]
+        wait.return_value.until.side_effect = [qr_element, TimeoutException()]
 
         login = SgccLogin.__new__(SgccLogin)
         login.driver = driver
@@ -365,6 +397,8 @@ class LoginFallbackTestCase(unittest.TestCase):
             "sgcc_ha_bridge.login.get_data_dir", return_value=tmpdir
         ), patch.object(
             SgccLogin, "is_logged_in_page", return_value=False
+        ), patch.object(
+            SgccLogin, "_switch_to_qr_panel"
         ), patch("sgcc_ha_bridge.login.time.sleep"):
             self.assertFalse(login._qr_login(driver, "test"))
 

@@ -143,6 +143,7 @@ class ErrorWatcher:
                     'levels': log_levels,
                 },
                 'raw_html_saved': False,
+                'ui_state_saved': False,
                 'screenshot_saved': _env_truthy("SGCC_ERROR_SCREENSHOT"),
             })
             meta_path = capture_dir / "meta.redacted.json"
@@ -151,6 +152,41 @@ class ErrorWatcher:
                 encoding="utf-8",
             )
             meta_path.chmod(0o600)
+
+            # 结构现场：SGCC_ERROR_HTML=1 时额外落一份「登录框 HTML + 浮层清单」。
+            # 只留结构不留内容——输入框的值、图片 base64 全部抹掉，避免把手机号、
+            # 密码之类写进磁盘。排查「有没有弹浮层 / 选择器还对不对」靠这个就够。
+            if _env_truthy("SGCC_ERROR_HTML"):
+                try:
+                    snapshot = self._ui_snapshot()
+                    if snapshot:
+                        html_path = capture_dir / "login_box.html"
+                        html_path.write_text(
+                            snapshot.get("login_box_html", ""),
+                            encoding="utf-8",
+                        )
+                        html_path.chmod(0o600)
+                        state_path = capture_dir / "ui-state.json"
+                        state_path.write_text(
+                            json.dumps(
+                                {k: v for k, v in snapshot.items() if k != "login_box_html"},
+                                ensure_ascii=False,
+                                indent=2,
+                            ) + "\n",
+                            encoding="utf-8",
+                        )
+                        state_path.chmod(0o600)
+                        meta["raw_html_saved"] = True
+                        meta["ui_state_saved"] = True
+                        meta_path.write_text(
+                            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8",
+                        )
+                except Exception as snapshot_error:
+                    logging.warning(
+                        "保存登录框结构失败: %s",
+                        redact_text(snapshot_error)[:200],
+                    )
             if _env_truthy("SGCC_ERROR_SCREENSHOT"):
                 screenshot_path = capture_dir / "screenshot.png"
                 driver.save_screenshot(str(screenshot_path))
@@ -164,6 +200,67 @@ class ErrorWatcher:
         except Exception as e:
             logging.error(f"保存浏览器现场失败: {redact_text(e)}")
             return None
+
+    def _ui_snapshot(self) -> dict | None:
+        """收集登录页结构快照（只留结构，抹掉输入值与图片数据）。"""
+        driver = self.driver
+        if not driver:
+            return None
+        return driver.execute_script("""
+            const box = document.querySelector('#login_box');
+            const visible = (el) => {
+                if (!el) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0 && el.offsetParent !== null;
+            };
+            const desc = (el) => ({
+                tag: el.tagName,
+                cls: String(el.className || '').slice(0, 160),
+                text: (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+                visible: visible(el),
+            });
+
+            const inputs = Array.from(
+                document.querySelectorAll('#login_box input')
+            ).map((el) => ({
+                placeholder: el.getAttribute('placeholder') || '',
+                visible: visible(el),
+                value_len: String(el.value || '').length,
+            }));
+
+            const captchaNodes = Array.from(document.querySelectorAll(
+                '#tCaptchaDyContent, [class*="tencent-captcha"]'
+            )).filter(visible).map(desc);
+
+            const modals = Array.from(document.querySelectorAll('div'))
+                .filter((el) => visible(el)
+                    && /确定|请依次点击|拖动下方|安全验证/.test(el.innerText || '')
+                    && el.getBoundingClientRect().width < window.innerWidth * 0.9)
+                .slice(0, 8)
+                .map(desc);
+
+            let html = box ? box.outerHTML : '';
+            html = html.replace(/data:image\\/[a-z+]+;base64,[A-Za-z0-9+/=]+/g, 'data:image/...');
+            html = html.replace(/(<input[^>]*?)\\svalue="[^"]*"/g, '$1');
+            html = html.slice(0, 40000);
+
+            return {
+                current_url: location.href,
+                tabs: Array.from(document.querySelectorAll(
+                    '#login_box .password_login, #login_box .code_login, #login_box .qr_code'
+                )).map(desc),
+                inputs: inputs,
+                captcha_visible: captchaNodes,
+                modal_like: modals,
+                errmsgs: Array.from(document.querySelectorAll('.errmsg-tip'))
+                    .map(desc),
+                sms_form_visible: !!Array.from(
+                    document.querySelectorAll("input[placeholder='手机号码']")
+                ).some(visible),
+                qr_panel_visible: visible(document.querySelector('.sweepCodePic')),
+                login_box_html: html,
+            };
+        """)
 
     def _prune(self) -> None:
         try:

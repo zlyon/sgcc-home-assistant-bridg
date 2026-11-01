@@ -644,16 +644,113 @@ class SgccLogin:
                 methods.append(method)
         return methods
 
+    @staticmethod
+    def _sms_form_visible(driver) -> bool:
+        """短信表单是否真的在屏幕上（用它判断「切标签」有没有成功）。"""
+        try:
+            return bool(driver.execute_script("""
+                const el = document.querySelector("input[placeholder='手机号码']");
+                if (!el) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 40 && rect.height > 10 && el.offsetParent !== null;
+            """))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _sms_input(driver, placeholder: str, fallback_index: int):
+        """按占位符取短信表单里的输入框，取不到再退回 el-input__inner 下标。"""
+        for element in driver.find_elements(
+            By.CSS_SELECTOR, f"input[placeholder='{placeholder}']"
+        ):
+            try:
+                if element.is_displayed():
+                    return element
+            except Exception:
+                continue
+        inputs = driver.find_elements(By.CLASS_NAME, "el-input__inner")
+        return inputs[fallback_index] if len(inputs) > fallback_index else None
+
+    def _open_sms_login_tab(self, driver) -> None:
+        """切到「短信验证码登录」并确认表单真的出现过。
+
+        原来用绝对路径 XPath（#login_box/div[1]/div[1]/div[3]/span）点标签，国网前端
+        一改版就点到空节点；点空之后填手机号、点发码全作用在隐藏的密码表单上，
+        表现出来就是「不发验证码、也不弹验证」，最后被 RK001 收尾。
+        这里改按真实 class（.code_login）定位，并以「手机号输入框可见」作为成功判据。
+        """
+        if self._sms_form_visible(driver):
+            logging.info("短信验证码登录表单已显示，无需重复切换标签。")
+            return
+
+        for label, script in (
+            (
+                "class",
+                "const el = document.querySelector('#login_box .code_login');"
+                " if (el) { el.click(); return true; } return false;",
+            ),
+            ("xpath", None),
+        ):
+            try:
+                if script:
+                    if not driver.execute_script(script):
+                        logging.warning("未找到短信验证码登录标签（class 方式）。")
+                        continue
+                else:
+                    self._click_button(
+                        driver,
+                        By.XPATH,
+                        '//*[@id="login_box"]/div[1]/div[1]/div[3]/span',
+                    )
+            except Exception as error:
+                logging.warning(
+                    "切换短信验证码登录失败，方式=%s: %s",
+                    label,
+                    redact_text(error)[:200],
+                )
+                continue
+            for _ in range(20):
+                if self._sms_form_visible(driver):
+                    logging.info("已切换到短信验证码登录，方式=%s。", label)
+                    return
+                time.sleep(0.25)
+
+        raise LoginFailure(
+            "phone_code_page_failed",
+            "未能切换到短信验证码登录表单",
+        )
+
+    def _submit_sms_login(self, driver) -> None:
+        """点短信表单的登录按钮：按表单内「登录」按钮定位，取不到再退回旧 XPath。"""
+        clicked = driver.execute_script("""
+            const code = document.querySelector("input[placeholder='请输入验证码']");
+            if (!code) return false;
+            const form = code.closest('form');
+            if (!form) return false;
+            const btn = Array.from(form.querySelectorAll('button'))
+                .find(b => /登录/.test(b.innerText || ''));
+            if (!btn) return false;
+            btn.click();
+            return true;
+        """)
+        if clicked:
+            return
+        self._click_button(
+            driver,
+            By.XPATH,
+            '//*[@id="login_box"]/div[2]/div[2]/form/div[2]/div/button/span',
+        )
+
     def _phone_code_login(self, driver, reason: str) -> bool:
         logging.info("短信验证码登录开始。")
         self._record_debug_event("phone_code_started")
-        self._click_button(driver, By.XPATH, '//*[@id="login_box"]/div[1]/div[1]/div[3]/span')
+        self._open_sms_login_tab(driver)
         time.sleep(self.config.RETRY_WAIT_TIME_OFFSET_UNIT)
-        input_elements = driver.find_elements(By.CLASS_NAME, "el-input__inner")
-        if len(input_elements) < 4:
+        phone_input = self._sms_input(driver, "手机号码", 2)
+        if phone_input is None:
             raise LoginFailure("phone_code_page_failed", "短信验证码登录页面输入框不完整")
-        input_elements[2].clear()
-        self._type_text(input_elements[2], self._username)
+        phone_input.clear()
+        self._type_text(phone_input, self._username)
         logging.info(f"已输入用户名: {mask_secret(self._username)}\r")
         request_state = self._request_phone_code(driver)
         self._record_debug_event(
@@ -667,10 +764,14 @@ class SgccLogin:
         if not code:
             interaction.notify_result("phone-code", False, "未在有效时间内收到短信验证码")
             raise LoginFailure("phone_code_timeout", "未在有效时间内收到短信验证码")
-        self._type_text(input_elements[3], code)
+        # 解验证码时页面可能重渲染过，输入框句柄会失效，这里重新取一次。
+        code_input = self._sms_input(driver, "请输入验证码", 3)
+        if code_input is None:
+            raise LoginFailure("phone_code_page_failed", "未找到验证码输入框")
+        self._type_text(code_input, code)
         code = None
         logging.info("已输入手机验证码。\r")
-        self._click_button(driver, By.XPATH, '//*[@id="login_box"]/div[2]/div[2]/form/div[2]/div/button/span')
+        self._submit_sms_login(driver)
         self._record_debug_event("phone_code_submitted", capture_browser=True)
         state, error = self._wait_for_login_submit_state(driver)
         self._record_debug_event(
@@ -732,6 +833,70 @@ class SgccLogin:
         )
         raise LoginFailure(classify_login_failure(error), error)
 
+    def _await_phone_code_sent(self, driver, window: float) -> dict:
+        """点击发码后等待「真的发出去了」，中途遇到的验证码就地解掉。
+
+        这里不再依赖前端状态自证：国网在前端已经开始倒计时（auth_time、sendAuthCode
+        都已翻牌）的情况下，屏幕上仍可能挂着点选浮层——短信根本没发出去。所以每轮都
+        先看有没有验证码，只有「没有验证码 + 前端确认已发送」才算成功。
+        """
+        deadline = time.monotonic() + window
+        hard_deadline = deadline + window * 2  # 最多再给两轮解算的时间，防死循环
+        solves = 0
+        latest = {"status": "pending", "auth_time": 0, "code_msg": "", "error": ""}
+        reported = ""
+        while time.monotonic() < min(deadline, hard_deadline):
+            latest = self._phone_code_request_state(driver)
+            kind = self._detect_pending_captcha(driver, timeout=0)
+            if kind:
+                label = "腾讯人机" if kind == "tencent" else "国网图形点选"
+                logging.info("发送短信验证码前出现%s验证，开始解算。", label)
+                self._record_debug_event("phone_code_request_captcha_started", kind=kind)
+                passed = self._solve_post_submit_captcha(
+                    driver,
+                    stage="phone_code_request",
+                )
+                self._record_debug_event(
+                    "phone_code_request_captcha_finished",
+                    capture_browser=True,
+                    passed=passed,
+                )
+                if not passed:
+                    raise LoginFailure(
+                        "captcha_failed",
+                        f"发送短信验证码前的{label}验证未通过",
+                    )
+                solves += 1
+                if solves > 3:
+                    # 连着解三轮浮层还在，说明不是「没点对」而是「点了不消失」，
+                    # 继续循环只会把风控喂饱，直接交给上层换兜底方式。
+                    raise LoginFailure(
+                        "captcha_failed",
+                        "短信验证码发送前的人机验证连续通过后仍未消失",
+                    )
+                # 解完重新给前端一段确认时间，但不超过硬上限。
+                deadline = min(
+                    max(deadline, time.monotonic() + window),
+                    hard_deadline,
+                )
+                continue
+            signature = f"{latest['status']}|{latest['auth_time']}|{latest['error']}"
+            if signature != reported:
+                logging.info(
+                    "发码状态=%s auth_time=%s error=%s",
+                    latest["status"],
+                    latest["auth_time"],
+                    redact_text(latest["error"])[:80] or "-",
+                )
+                reported = signature
+            if latest["status"] == "sent":
+                return latest
+            if latest["status"] == "error":
+                return latest
+            time.sleep(0.3)
+        logging.warning("等待短信验证码发送确认超时（%.0f 秒）。", window)
+        return latest
+
     def _request_phone_code(self, driver) -> dict:
         """Click the visible send-code control and require a decisive frontend state."""
         # 点完「获取验证码」到前端真正请求短信之间，国网要先渲染图形点选浮层、等用户
@@ -739,9 +904,9 @@ class SgccLogin:
         # 接着换下一种点击方式再点一次按钮——浮层还挂在那儿，重复点击毫无意义，还会
         # 加重风控。这里放宽到可配置时长，且一旦探到浮层立即返回，不拖慢正常路径。
         try:
-            captcha_wait = float(os.getenv("SGCC_CAPTCHA_RENDER_WAIT", "8") or 8)
+            captcha_wait = float(os.getenv("SGCC_CAPTCHA_RENDER_WAIT", "25") or 25)
         except (TypeError, ValueError):
-            captcha_wait = 8.0
+            captcha_wait = 25.0
         attempts = (
             (
                 "native",
@@ -777,77 +942,16 @@ class SgccLogin:
                 )
                 continue
 
-            state = self._wait_for_phone_code_request_state(driver, timeout=captcha_wait)
+            # 浮层解算、状态轮询、超时判定都收敛到同一个循环里：浮层出现就地解掉，
+            # 解完继续等前端确认发码，而不是像以前那样一次判失败就换点击方式。
+            state = self._await_phone_code_sent(driver, captcha_wait)
             if state["status"] == "sent":
-                logging.info("国网前端已确认短信验证码发送。")
+                logging.info("国网前端已确认短信验证码发送，点击方式=%s。", method)
                 return state
             if state["status"] == "error":
                 raise LoginFailure(
                     "phone_code_request_failed",
                     state.get("error") or "国网前端返回短信验证码发送失败",
-                )
-            if state["status"] == "captcha":
-                logging.info("发送短信验证码前出现腾讯人机验证，开始处理。")
-                self._record_debug_event("phone_code_request_captcha_started")
-                passed = solve_captcha_in_browser(
-                    driver,
-                    max_retries=self.config.RETRY_TIMES_LIMIT,
-                )
-                self._record_debug_event(
-                    "phone_code_request_captcha_finished",
-                    capture_browser=True,
-                    passed=passed,
-                )
-                if not passed:
-                    raise LoginFailure(
-                        "captcha_failed",
-                        "发送短信验证码前的腾讯人机验证未通过",
-                    )
-                state = self._wait_for_phone_code_request_state(
-                    driver,
-                    timeout=10.0,
-                )
-                if state["status"] == "sent":
-                    logging.info("人机验证通过，国网前端已确认短信验证码发送。")
-                    return state
-                if state["status"] == "error":
-                    raise LoginFailure(
-                        "phone_code_request_failed",
-                        state.get("error") or "人机验证通过后短信验证码发送失败",
-                    )
-
-            if state["status"] == "captcha_generic":
-                # 国网自研的图形点选浮层。答案只存在于底图里，DOM 读不到，必须交给
-                # 多模态模型：截图裁剪 → 模型给坐标 → CDP 真实点击 → 点确定。
-                logging.info("发送短信验证码前出现图形点选验证，开始视觉解算。")
-                self._record_debug_event("phone_code_request_overlay_captcha_started")
-                passed = solve_overlay_captcha(driver)
-                self._record_debug_event(
-                    "phone_code_request_overlay_captcha_finished",
-                    capture_browser=True,
-                    passed=passed,
-                )
-                if not passed:
-                    # 浮层还在时反复点「获取验证码」只会加重风控，直接交给上层决策
-                    raise LoginFailure(
-                        "captcha_failed",
-                        "发送短信验证码前的图形点选验证未通过",
-                    )
-                state = self._wait_for_phone_code_request_state(
-                    driver,
-                    timeout=10.0,
-                )
-                if state["status"] == "sent":
-                    logging.info("图形验证通过，国网前端已确认短信验证码发送。")
-                    return state
-                if state["status"] == "error":
-                    raise LoginFailure(
-                        "phone_code_request_failed",
-                        state.get("error") or "图形验证通过后短信验证码发送失败",
-                    )
-                raise LoginFailure(
-                    "phone_code_request_failed",
-                    "图形验证已通过但前端未确认短信发送",
                 )
 
             logging.warning(
@@ -974,13 +1078,69 @@ class SgccLogin:
             )
         return {"status": "pending", "auth_time": 0, "code_msg": "", "error": ""}
 
+    @staticmethod
+    def _qr_panel_visible(driver) -> bool:
+        try:
+            return bool(driver.execute_script("""
+                const el = document.querySelector('.sweepCodePic');
+                if (!el) return false;
+                const rect = el.getBoundingClientRect();
+                return rect.width > 60 && rect.height > 60 && el.offsetParent !== null;
+            """))
+        except Exception:
+            return False
+
+    def _switch_to_qr_panel(self, driver) -> None:
+        """切到扫码面板，并确认真的切过去了。
+
+        原来直接 ActionChains 点 `.qr_code`。一旦发码时的点选浮层还挂在页面上，这次
+        点击会被浮层遮罩吃掉（ElementClickInterceptedException），但旧代码不看结果就
+        往下走，接着 `_wait_for_fresh_qr_image` 在短信面板上找不到二维码，超时抛异常，
+        Telegram 那边自然一张图都收不到。这里改用 JS 点击绕过遮罩，并以
+        「.sweepCodePic 可见」作为切换成功的判据。
+        """
+        if self._qr_panel_visible(driver):
+            logging.info("扫码面板已显示，无需重复切换。")
+            return
+
+        switched = driver.execute_script("""
+            const tab = document.querySelector('#login_box .qr_code');
+            if (!tab) return false;
+            tab.click();
+            return true;
+        """)
+        if not switched:
+            logging.warning("未找到扫码 Tab 元素，回退到显式元素点击。")
+            try:
+                element = WebDriverWait(
+                    driver,
+                    self.config.DRIVER_IMPLICITY_WAIT_TIME,
+                ).until(
+                    EC.presence_of_element_located((By.CLASS_NAME, "qr_code"))
+                )
+                self._click_element(driver, element)
+            except Exception as error:
+                logging.warning(
+                    "切换到扫码面板失败: %s",
+                    redact_text(error)[:200],
+                )
+                raise LoginFailure("qrcode_page_failed", "未能切换到扫码登录面板")
+
+        for _ in range(20):
+            if self._qr_panel_visible(driver):
+                logging.info("已切换到二维码模式")
+                return
+            time.sleep(0.25)
+
+        self._record_debug_event("qrcode_switch_failed", capture_browser=True)
+        raise LoginFailure(
+            "qrcode_page_failed",
+            "点击扫码 Tab 后二维码区域未出现",
+        )
+
     def _qr_login(self, driver, reason: str) -> bool:
         logging.info("二维码登录开始")
-        # 切换验证码
-        element = WebDriverWait(driver, self.config.DRIVER_IMPLICITY_WAIT_TIME).until(
-            EC.presence_of_element_located((By.CLASS_NAME, 'qr_code')))
-        self._click_element(driver, element)
-        logging.info("已切换到二维码模式")
+        self._switch_to_qr_panel(driver)
 
         time.sleep(self.config.RETRY_WAIT_TIME_OFFSET_UNIT)
         qrElement = self._wait_for_fresh_qr_image(driver)
