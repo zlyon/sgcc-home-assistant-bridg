@@ -254,7 +254,11 @@ https://github.com/MaribelHearm/sgcc-home-assistant-bridg
 | `SGCC_LOGIN_INTERACTION_PROVIDER` | 登录人工交互提供方：`auto`、`telegram`、`url`、`both`、`none`；默认 `auto`，启用已完整配置的 Telegram，并兼容 `PUSH_QRCODE_URL`。 |
 | `SGCC_TELEGRAM_BOT_TOKEN` | Telegram Bot Token；敏感配置，不进入日志和 Debug 环境快照。兼容 `TG_BOT_TOKEN`。 |
 | `SGCC_TELEGRAM_CHAT_ID` | 唯一允许接收二维码和回复短信验证码的 Telegram Chat ID。兼容 `TG_CHAT_ID`。 |
-| `SGCC_TELEGRAM_API_BASE_URL` | Telegram Bot API 地址，默认 `https://api.telegram.org`；兼容 `TG_API_BASE_URL`。仅接受无 URL 凭证、查询参数或 fragment 的 HTTPS 地址。 |
+| `SGCC_TELEGRAM_API_BASE_URL` | Telegram Bot API 地址，默认 `https://api.telegram.org`；兼容 `TG_API_BASE_URL`。仅接受无 URL 凭证、查询参数或 fragment 的 HTTPS 地址。第三方反代单次往返常有 20 秒以上抖动，配合下面三项超时使用。 |
+| `SGCC_TELEGRAM_SEND_TIMEOUT` | 发送文本消息的超时秒数，默认 `30`。 |
+| `SGCC_TELEGRAM_PHOTO_TIMEOUT` | 发送二维码图片的超时秒数，默认 `60`（上传远慢于文本）。 |
+| `SGCC_TELEGRAM_POLL_TIMEOUT` | `getUpdates` 单次 HTTP 往返超时秒数，默认 `45`，不含 Telegram 侧挂起时间。 |
+| `SGCC_TELEGRAM_SEND_RETRIES` | 可重试失败（超时 / 连接错误 / 502-504）的最大尝试次数，含首次，默认 `2`。`409`（webhook 冲突）与其余 4xx 不重试。 |
 | `SGCC_SMS_CODE_TIMEOUT_SECONDS` | 等待短信验证码回复的秒数，范围 `30..600`，默认 `180`。 |
 | `LLM_API_KEY` | OpenAI 兼容多模态接口 Key；也兼容 `ARK_API_KEY`。 |
 | `LLM_BASE_URL` | OpenAI 兼容接口 Base URL；也兼容 `ARK_BASE_URL`。 |

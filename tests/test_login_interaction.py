@@ -3,6 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import requests
+
 from sgcc_ha_bridge.login_interaction import (
     NoopLoginInteraction,
     TelegramLoginInteraction,
@@ -191,6 +193,97 @@ class TelegramLoginInteractionTestCase(unittest.TestCase):
 
         self.assertEqual(post.call_count, 5)
         self.assertEqual(post.call_args_list[4].kwargs["json"]["offset"], 12)
+
+    @patch("sgcc_ha_bridge.login_interaction.time.monotonic")
+    @patch("sgcc_ha_bridge.login_interaction.requests.post")
+    def test_sms_still_prompts_when_preflight_probe_times_out(self, post, monotonic):
+        """预检 getUpdates 失败不能连累「发提示」这一步。"""
+        monotonic.side_effect = [0, 0, 1]
+        post.side_effect = [
+            requests.exceptions.Timeout("proxy slow"),
+            response({"message_id": 99}),
+            response([{
+                "update_id": 11,
+                "message": {
+                    "chat": {"id": 42},
+                    "message_id": 120,
+                    "text": "246810",
+                },
+            }]),
+        ]
+        interaction = TelegramLoginInteraction("token", "42", sms_wait_seconds=60)
+
+        self.assertEqual(interaction.request_sms_code("RK001"), "246810")
+        # 预检失败后不应带 offset，否则会把「提示之前的历史消息」之外的东西也吞掉
+        poll_payload = post.call_args_list[2].kwargs["json"]
+        self.assertNotIn("offset", poll_payload)
+
+    @patch("sgcc_ha_bridge.login_interaction.time.monotonic")
+    @patch("sgcc_ha_bridge.login_interaction.requests.post")
+    def test_sms_accepts_plain_number_without_force_reply(self, post, monotonic):
+        """用户直接打字（没用「回复」）也要认，只要消息晚于提示。"""
+        monotonic.side_effect = [0, 0, 1]
+        post.side_effect = [
+            response([]),
+            response({"message_id": 99}),
+            response([
+                {
+                    "update_id": 10,
+                    "message": {
+                        "chat": {"id": 42},
+                        "message_id": 90,
+                        "text": "111111",
+                    },
+                },
+                {
+                    "update_id": 11,
+                    "message": {
+                        "chat": {"id": 42},
+                        "message_id": 100,
+                        "text": "654321",
+                    },
+                },
+            ]),
+        ]
+        interaction = TelegramLoginInteraction("token", "42", sms_wait_seconds=60)
+
+        self.assertEqual(interaction.request_sms_code("RK001"), "654321")
+
+    @patch("sgcc_ha_bridge.login_interaction.time.sleep")
+    @patch("sgcc_ha_bridge.login_interaction.requests.post")
+    def test_qrcode_send_retries_transient_timeout(self, post, sleep):
+        post.side_effect = [
+            requests.exceptions.Timeout("proxy slow"),
+            response({"message_id": 7}),
+        ]
+        interaction = TelegramLoginInteraction("token", "42", photo_timeout=45)
+
+        self.assertTrue(interaction.send_qr_code(b"png", "RK001"))
+        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_args_list[1].kwargs["timeout"], 45)
+
+    @patch("sgcc_ha_bridge.login_interaction.time.sleep")
+    @patch("sgcc_ha_bridge.login_interaction.requests.post")
+    def test_sms_poll_survives_single_get_updates_failure(self, post, sleep):
+        monotonic = Mock(side_effect=[0, 0, 1, 2, 3])
+        post.side_effect = [
+            response([]),
+            response({"message_id": 99}),
+            requests.exceptions.Timeout("blip"),
+            response([{
+                "update_id": 11,
+                "message": {
+                    "chat": {"id": 42},
+                    "reply_to_message": {"message_id": 99},
+                    "text": "135790",
+                },
+            }]),
+        ]
+        interaction = TelegramLoginInteraction("token", "42", sms_wait_seconds=60)
+
+        with patch("sgcc_ha_bridge.login_interaction.time.monotonic", monotonic):
+            self.assertEqual(interaction.request_sms_code("RK001"), "135790")
+        self.assertEqual(post.call_count, 4)
 
 
 if __name__ == "__main__":
