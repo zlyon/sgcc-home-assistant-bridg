@@ -27,6 +27,23 @@ _POLL_PAYLOAD_TIMEOUT = 10
 # 4xx/409 这类确定性失败直接返回，重试只会白等。
 _RETRYABLE_ERRORS = {"timeout", "connection", "http_502", "http_503", "http_504"}
 
+# 自建反代挂在 Cloudflare 后面时，默认的 python-requests UA 会被 Bot Fight Mode
+# 直接判成机器人，边缘返回 403 + "error code: 1010"，请求根本到不了 api.telegram.org。
+# 容器里看到的就是一句「HTTP 403」，很容易误判成 Bot Token 失效。
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+)
+
+
+def _telegram_headers() -> dict:
+    agent = os.getenv("SGCC_TELEGRAM_USER_AGENT", "").strip() or _DEFAULT_USER_AGENT
+    return {
+        "User-Agent": agent,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+
 
 class LoginInteraction(Protocol):
     def send_qr_code(self, qrcode: bytes, reason: str) -> bool:
@@ -331,16 +348,27 @@ class TelegramLoginInteraction:
 
     def _post_once(self, method: str, *, timeout: Optional[float] = None, **kwargs):
         """返回 (result, error)。result 为 None 时 error 说明原因。"""
+        headers = dict(_telegram_headers())
+        headers.update(kwargs.pop("headers", None) or {})
         try:
             response = requests.post(
                 f"{self.bot_url}/{method}",
                 timeout=timeout or self.request_timeout,
+                headers=headers,
                 **kwargs,
             )
             if response.status_code == 409:
                 return None, "conflict"
             if response.status_code != 200:
-                logging.warning(f"Telegram Bot {method} 请求失败，HTTP {response.status_code}。")
+                # Cloudflare 拦下来时正文是纯文本 "error code: 1010"，
+                # 只打状态码会把「被边缘拦截」误认成「Bot 凭证失效」。
+                snippet = (response.text or "").strip().replace("\n", " ")[:200]
+                logging.warning(
+                    "Telegram Bot %s 请求失败，HTTP %s，响应=%s",
+                    method,
+                    response.status_code,
+                    redact_text(snippet) or "-",
+                )
                 return None, f"http_{response.status_code}"
             payload = response.json()
             if not payload.get("ok"):

@@ -839,15 +839,34 @@ class SgccLogin:
         这里不再依赖前端状态自证：国网在前端已经开始倒计时（auth_time、sendAuthCode
         都已翻牌）的情况下，屏幕上仍可能挂着点选浮层——短信根本没发出去。所以每轮都
         先看有没有验证码，只有「没有验证码 + 前端确认已发送」才算成功。
+
+        更隐蔽的一层：国网在弹出腾讯点选浮层的**同一刻**就会把 passLoginErrMsg 标成
+        失败（还可能保留上一次登录失败的残留文案）。若第一轮就信 `status=error`，流程
+        会在浮层还没渲染出来时掉头就走——现场表现就是「既不点验证码、也不发码」，
+        紧接着的扫码兜底还会被这个没人处理的浮层罩住。因此这里加一个观察期：
+        观察期内只认浮层、不认 error；观察期过后 error 还要连续命中才当终局。
         """
+        try:
+            grace = float(os.getenv("SGCC_CAPTCHA_OVERLAY_GRACE", "6") or 6)
+        except (TypeError, ValueError):
+            grace = 6.0
+        grace = max(1.0, grace)
+
         deadline = time.monotonic() + window
         hard_deadline = deadline + window * 2  # 最多再给两轮解算的时间，防死循环
+        grace_deadline = time.monotonic() + grace
         solves = 0
         latest = {"status": "pending", "auth_time": 0, "code_msg": "", "error": ""}
         reported = ""
+        error_streak = 0
+        error_noted = False
+
         while time.monotonic() < min(deadline, hard_deadline):
             latest = self._phone_code_request_state(driver)
-            kind = self._detect_pending_captcha(driver, timeout=0)
+            # 浮层探测必须给时间：点击动作返回时腾讯组件往往还没注入 DOM。
+            # 原来这里传 timeout=0 只探一次，等于必然扑空。
+            probe_timeout = 1.2 if time.monotonic() < grace_deadline else 0.4
+            kind = self._detect_pending_captcha(driver, timeout=probe_timeout)
             if kind:
                 label = "腾讯人机" if kind == "tencent" else "国网图形点选"
                 logging.info("发送短信验证码前出现%s验证，开始解算。", label)
@@ -879,7 +898,10 @@ class SgccLogin:
                     max(deadline, time.monotonic() + window),
                     hard_deadline,
                 )
+                grace_deadline = time.monotonic() + grace
+                error_streak = 0
                 continue
+
             signature = f"{latest['status']}|{latest['auth_time']}|{latest['error']}"
             if signature != reported:
                 logging.info(
@@ -892,7 +914,21 @@ class SgccLogin:
             if latest["status"] == "sent":
                 return latest
             if latest["status"] == "error":
-                return latest
+                if time.monotonic() < grace_deadline:
+                    # 浮层可能还在路上，先别下结论。
+                    if not error_noted:
+                        logging.info(
+                            "前端已报失败，但浮层可能尚未渲染，继续观察 %.0f 秒再判定。",
+                            grace,
+                        )
+                        error_noted = True
+                    error_streak = 0
+                else:
+                    error_streak += 1
+                    if error_streak >= 3:
+                        return latest
+            else:
+                error_streak = 0
             time.sleep(0.3)
         logging.warning("等待短信验证码发送确认超时（%.0f 秒）。", window)
         return latest
@@ -1090,6 +1126,22 @@ class SgccLogin:
         except Exception:
             return False
 
+    @staticmethod
+    def _qr_panel_text(driver) -> str:
+        """二维码面板当前显示的文案，用来判断「等待扫码 / 已扫码待确认 / 已失效」。"""
+        try:
+            return str(
+                driver.execute_script("""
+                    const panel = document.querySelector('.sweepCodePic');
+                    if (!panel) return '';
+                    const text = panel.innerText || panel.textContent || '';
+                    return text.replace(/\\s+/g, ' ').trim();
+                """)
+                or ""
+            )
+        except Exception:
+            return ""
+
     def _switch_to_qr_panel(self, driver) -> None:
         """切到扫码面板，并确认真的切过去了。
 
@@ -1138,11 +1190,119 @@ class SgccLogin:
             "点击扫码 Tab 后二维码区域未出现",
         )
 
+    def _dismiss_pending_captcha(self, driver, timeout: float = 1.5) -> bool:
+        """把挂着没人处理的验证码清掉，再继续走别的兜底方式。
+
+        「短信发码失败 → 直接切扫码」这条路上，腾讯点选浮层如果没人关，会一直盖在
+        页面上：二维码区域虽然被判成已切换，但它盖住整页，后续任何点击（比如二维码
+        失效后重新获取）都会被遮罩吃掉，扫码确认后的跳转也走不完。所以切兜底之前
+        必须先把浮层清干净。
+        """
+        kind = self._detect_pending_captcha(driver, timeout=timeout)
+        if not kind:
+            return False
+        label = "腾讯人机" if kind == "tencent" else "国网图形点选"
+        logging.info("检测到未处理的%s验证浮层，先清理再继续。", label)
+        self._record_debug_event("pending_captcha_dismiss_started", kind=kind)
+
+        if kind == "tencent":
+            for selector in (
+                ".tencent-captcha-dy__close",
+                ".tencent-captcha-dy__close-btn",
+                ".tcaptcha-close",
+                "#tcaptcha_iframe ~ .tcaptcha-close",
+            ):
+                try:
+                    targets = list(driver.find_elements(By.CSS_SELECTOR, selector) or [])
+                except Exception:
+                    targets = []
+                for target in targets:
+                    try:
+                        if not target.is_displayed():
+                            continue
+                        driver.execute_script("arguments[0].click();", target)
+                        time.sleep(0.5)
+                        if not self._detect_pending_captcha(driver, timeout=1.0):
+                            logging.info("已关闭%s验证浮层。", label)
+                            self._record_debug_event("pending_captcha_dismissed", kind=kind)
+                            return True
+                    except Exception:
+                        continue
+
+        # 关不掉就重载登录页：代价几秒，但能保证不再有残留浮层污染后续流程。
+        try:
+            self._safe_get(driver, LOGIN_URL, "登录页面（清理残留验证）")
+            time.sleep(2)
+            gone = not self._detect_pending_captcha(driver, timeout=2.0)
+            logging.info("已重载登录页以清理残留%s浮层，结果=%s。", label, gone)
+            self._record_debug_event("pending_captcha_dismissed_by_reload", kind=kind)
+            return True
+        except Exception as error:
+            logging.warning(
+                "清理验证码浮层失败[%s]: %s",
+                type(error).__name__,
+                redact_text(error)[:200],
+            )
+            return False
+
+    def _refresh_qr_image(self, driver, timeout: float = 8.0) -> bool:
+        """截图前主动换一张新二维码。
+
+        中转把图片送到手机可能要十几秒，而国网二维码在服务端的有效期只有 60 秒
+        左右。沿用进页面时生成的那张，用户拿到时往往已经过半，扫完还没确认就过期
+        ——现场表现就是「手机扫了没报失效，但网页一直没登录成功」。
+        这里点一次图片重新获取，把完整有效期留给扫码。
+        """
+        try:
+            before = driver.execute_script("""
+                const img = document.querySelector('.sweepCodePic img');
+                return img ? (img.getAttribute('src') || '') : '';
+            """)
+            # 拿不到字符串说明图片还没渲染出来，此时刷新意义不大，交给后续等待。
+            if not isinstance(before, str) or not before:
+                return False
+            clicked = driver.execute_script("""
+                const panel = document.querySelector('.sweepCodePic');
+                const img = document.querySelector('.sweepCodePic img');
+                const ready = img && img.complete && Number(img.naturalWidth || 0) > 0;
+                if (!panel || !ready) return false;
+                panel.click();
+                return true;
+            """)
+            if not clicked:
+                return False
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                time.sleep(0.4)
+                after = driver.execute_script("""
+                    const img = document.querySelector('.sweepCodePic img');
+                    return img ? (img.getAttribute('src') || '') : '';
+                """)
+                if isinstance(after, str) and after and after != before:
+                    logging.info("已刷新登录二维码，重新计时有效期。")
+                    self._record_debug_event("qrcode_refreshed_before_capture")
+                    return True
+            logging.info("点击刷新后二维码未变化，沿用当前图片。")
+            return False
+        except Exception as error:
+            logging.warning(
+                "刷新登录二维码失败[%s]: %s",
+                type(error).__name__,
+                redact_text(error)[:200],
+            )
+            return False
+
     def _qr_login(self, driver, reason: str) -> bool:
         logging.info("二维码登录开始")
+        # 上一步（短信发码）很可能已经在页面上留下一个没人解的点选浮层，
+        # 它会把整个二维码面板罩住，必须先清掉。
+        self._dismiss_pending_captcha(driver)
         self._switch_to_qr_panel(driver)
 
-        time.sleep(self.config.RETRY_WAIT_TIME_OFFSET_UNIT)
+        # 不再固定等 10 秒：二维码本身有 60 秒左右的 TTL，白等就是在烧它的寿命。
+        # 下面的 _wait_for_fresh_qr_image 本来就会等到图片真正加载完成。
+        time.sleep(min(1.5, self.config.RETRY_WAIT_TIME_OFFSET_UNIT))
+        self._refresh_qr_image(driver)
         qrElement = self._wait_for_fresh_qr_image(driver)
         logging.info("已找到二维码图片元素")
 
@@ -1176,8 +1336,15 @@ class SgccLogin:
             except Exception as notify_error:
                 logging.warning(f"二维码通知失败，继续等待本地扫码: {notify_error}")
             for i in range(1, self.config.QR_CODE_LOGIN_WAIT_COUNT + 1):
-                logging.info(f'二维码登录等待检查[{self.config.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT}] 次数[{i}]')
                 time.sleep(self.config.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT)
+                # 把二维码面板上的提示一起打出来：能看到「请扫码」→「扫描成功，请在手机上
+                # 确认」的变化，才知道手机扫了到底有没有被服务端认下来。
+                logging.info(
+                    '二维码登录等待检查[%s] 次数[%s] 面板文案=%s',
+                    self.config.QR_CODE_LOGIN_WAIT_TIME_INTERVAL_UNIT,
+                    i,
+                    redact_text(self._qr_panel_text(driver))[:80] or "-",
+                )
                 if driver.current_url != LOGIN_URL:
                     try:
                         WebDriverWait(
