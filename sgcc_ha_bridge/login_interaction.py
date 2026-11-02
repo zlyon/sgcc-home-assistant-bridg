@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Protocol
@@ -120,6 +121,7 @@ class TelegramLoginInteraction:
     poll_timeout: float = _DEFAULT_POLL_TIMEOUT
     send_retries: int = _DEFAULT_SEND_RETRIES
     _next_update_offset: Optional[int] = field(default=None, init=False, repr=False)
+    _cancel: Optional[threading.Event] = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_env(cls) -> Optional["TelegramLoginInteraction"]:
@@ -180,6 +182,12 @@ class TelegramLoginInteraction:
     def bot_url(self) -> str:
         return f"{self.api_base_url}/bot{self.token}"
 
+    def attach_cancel(self, event: threading.Event) -> None:
+        self._cancel = event
+
+    def _cancelled(self) -> bool:
+        return self._cancel is not None and self._cancel.is_set()
+
     def send_qr_code(self, qrcode: bytes, reason: str) -> bool:
         result = self._post(
             "sendPhoto",
@@ -202,6 +210,8 @@ class TelegramLoginInteraction:
         return bool(result)
 
     def request_sms_code(self, reason: str) -> Optional[str]:
+        if self._cancelled():
+            return None
         offset_status, base_offset = self._probe_update_offset()
         if offset_status == "conflict":
             return None
@@ -238,6 +248,12 @@ class TelegramLoginInteraction:
         deadline = time.monotonic() + self.sms_wait_seconds
         consecutive_failures = 0
         while time.monotonic() < deadline:
+            if self._cancelled():
+                # 并行取码时另一条通道先赢了，这里安静退出，不再发超时提示。
+                # 但提示消息还挂在 TG 里，用户可能会照着回复，所以补一句说明。
+                logging.info("其它通道已取到短信验证码，Telegram 停止等待人工回传。")
+                self._notify("验证码已由内网通道自动获取，本条提示无需回复。")
+                return None
             remaining = max(1, int(deadline - time.monotonic()))
             poll_timeout = min(_POLL_PAYLOAD_TIMEOUT, remaining)
             payload = {"timeout": poll_timeout, "allowed_updates": ["message"]}
@@ -273,6 +289,8 @@ class TelegramLoginInteraction:
                     logging.info("已从 Telegram 收到本次登录的短信验证码回复。")
                     return code
 
+        if self._cancelled():
+            return None
         self._notify("本次国家电网短信验证码等待已超时，登录已安全取消。")
         return None
 
@@ -414,26 +432,301 @@ class TelegramLoginInteraction:
             return None, "exception"
 
 
+_RELAY_WAIT_CHUNK = 25.0
+_DEFAULT_RELAY_MAX_AGE = 90
+
+
+def _as_sms_code(value) -> Optional[str]:
+    code = str(value or "").strip()
+    return code if _SMS_CODE_RE.fullmatch(code) else None
+
+
+class SmsRelayLoginInteraction(NoopLoginInteraction):
+    """从局域网内的短信中转服务拉取验证码。
+
+    中转服务轮询短信、抠出验证码并挂在 `GET /code`、`GET /wait` 上。
+    这里主动去取，因此不需要公网回调地址、也不需要有人在 Telegram 里
+    手动回传——整个链路都在内网闭环。
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        token: str = "",
+        request_timeout: float = _DEFAULT_TIMEOUT,
+        wait_seconds: int = _DEFAULT_SMS_WAIT_SECONDS,
+        max_age: int = _DEFAULT_RELAY_MAX_AGE,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+        self.request_timeout = request_timeout
+        self.wait_seconds = wait_seconds
+        self.max_age = max_age
+        self._cancel: Optional[threading.Event] = None
+
+    def attach_cancel(self, event: threading.Event) -> None:
+        self._cancel = event
+
+    def _cancelled(self) -> bool:
+        return self._cancel is not None and self._cancel.is_set()
+
+    @classmethod
+    def from_env(cls) -> Optional["SmsRelayLoginInteraction"]:
+        raw = _first_env("SGCC_SMS_RELAY_URL", "SMS_RELAY_URL")
+        if not raw:
+            return None
+        if "://" not in raw:
+            raw = f"http://{raw}"
+        parsed = urlsplit(raw)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            logging.warning("SGCC_SMS_RELAY_URL 不合法（需要 http(s)://host:port），短信中转已禁用。")
+            return None
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        if parsed.path.strip("/"):
+            base_url += "/" + parsed.path.strip("/")
+        return cls(
+            base_url=base_url,
+            token=_first_env("SGCC_SMS_RELAY_TOKEN", "SMS_RELAY_TOKEN"),
+            request_timeout=_env_float("SGCC_SMS_RELAY_TIMEOUT", _DEFAULT_TIMEOUT, minimum=1.0),
+            wait_seconds=_env_int(
+                "SGCC_SMS_CODE_TIMEOUT_SECONDS",
+                _DEFAULT_SMS_WAIT_SECONDS,
+                minimum=30,
+                maximum=600,
+            ),
+            max_age=_env_int(
+                "SGCC_SMS_RELAY_MAX_AGE",
+                _DEFAULT_RELAY_MAX_AGE,
+                minimum=5,
+                maximum=300,
+            ),
+        )
+
+    def request_sms_code(self, reason: str) -> Optional[str]:
+        if self._cancelled():
+            return None
+        # 调用方是「先点了页面上的获取验证码，再走到这里」，所以短信可能已经被
+        # 中转容器抓到了，先捞一次最近 max_age 秒内的；取走即标记已读，
+        # 下一轮重试不会再拿到同一条作废的码。
+        head = self._get("/code", {"max_age": self.max_age})
+        if head is None:
+            # 中转不可达，赶紧让位给其它交互（Telegram 等），别把超时耗死在这里。
+            return None
+        code = _as_sms_code(head.get("code"))
+        if code:
+            logging.info("已从短信中转取到验证码，无需人工回传。")
+            return code
+
+        cursor = int(head.get("now") or 0)
+        deadline = time.monotonic() + self.wait_seconds
+        logging.info(
+            "已连上短信中转（%s），等待新验证码，最长 %ss。",
+            self.base_url,
+            self.wait_seconds,
+        )
+        failures = 0
+        while time.monotonic() < deadline:
+            if self._cancelled():
+                logging.info("其它通道已取到短信验证码，本机中转停止等待。")
+                return None
+            chunk = min(_RELAY_WAIT_CHUNK, max(1.0, deadline - time.monotonic()))
+            body = self._get(
+                "/wait",
+                {"since": cursor, "timeout": int(chunk)},
+                timeout=chunk + self.request_timeout,
+            )
+            if body is None:
+                failures += 1
+                if failures >= 3:
+                    logging.error("短信中转连续 3 次请求失败，已放弃等待验证码。")
+                    return None
+                time.sleep(1.5 * failures)
+                continue
+            failures = 0
+            cursor = int(body.get("now") or cursor)
+            code = _as_sms_code(body.get("code"))
+            if code:
+                logging.info("已从短信中转取到验证码（seq=%s）。", body.get("seq"))
+                return code
+
+        logging.warning("等待短信验证码超时（%ss）。", self.wait_seconds)
+        return None
+
+    def _get(self, path: str, params: Optional[dict] = None, *, timeout: Optional[float] = None):
+        headers = {"Accept": "application/json"}
+        if self.token:
+            # 放 header 而不是 query，避免 token 出现在任何访问日志的 URL 里
+            headers["X-Sms-Token"] = self.token
+        try:
+            response = requests.get(
+                f"{self.base_url}{path}",
+                params=params or {},
+                timeout=timeout or self.request_timeout,
+                headers=headers,
+            )
+        except Exception as error:
+            logging.warning(
+                "短信中转请求异常[%s]: %s",
+                type(error).__name__,
+                redact_text(str(error)),
+            )
+            return None
+        if response.status_code == 401:
+            logging.error(
+                "短信中转鉴权失败，请核对 SGCC_SMS_RELAY_TOKEN 与容器 config.json 的 api.token。"
+            )
+            return None
+        if response.status_code != 200:
+            logging.warning("短信中转返回 HTTP %s。", response.status_code)
+            return None
+        try:
+            body = response.json()
+        except Exception:
+            logging.warning("短信中转返回的不是 JSON。")
+            return None
+        if not isinstance(body, dict) or body.get("ok") is False:
+            logging.warning(
+                "短信中转返回失败：%s",
+                redact_text(str((body or {}).get("error") or "")) or "-",
+            )
+            return None
+        return body
+
+
+class RacingLoginInteraction:
+    """并行向多个通道索要验证码，哪个先回来用哪个。
+
+    和 CompositeLoginInteraction 的串行兜底不同：串行要等前一个通道把超时吃满
+    才会试下一个（两个通道都是分钟级超时，最坏情况白等两轮）。这里所有
+    「能取码」的通道同时开跑，先拿到有效码的赢，其余立刻收到取消信号。
+
+    `extras` 是不参与取码的通道（比如只负责发二维码的 URL 推送），
+    只参与 send_qr_code / notify_result。
+    """
+
+    def __init__(self, racers: list[LoginInteraction], extras: Optional[list[LoginInteraction]] = None):
+        self.racers = list(racers)
+        self.extras = list(extras or [])
+
+    def _channels(self) -> list[LoginInteraction]:
+        return self.racers + self.extras
+
+    def send_qr_code(self, qrcode: bytes, reason: str) -> bool:
+        # 逐个发完再汇总，不能短路：先返回 True 的通道会让后面的通道收不到二维码。
+        results = [_safe_call(item.send_qr_code, qrcode, reason) for item in self._channels()]
+        return any(results)
+
+    def notify_result(self, method: str, success: bool, detail: str = "") -> bool:
+        # 结果通知必须广播给所有通道。验证码是从哪条通道拿到的都一样——
+        # 哪怕中转赢了竞速，Telegram 依然要收到「登录成功/失败」。
+        # 这里刻意不用 any(...) 生成器（会短路），改成先全部调用再汇总。
+        results = [_safe_call(item.notify_result, method, success, detail) for item in self._channels()]
+        if not any(results):
+            logging.debug("没有任何通道受理登录结果通知（method=%s success=%s）。", method, success)
+        return any(results)
+
+    def request_sms_code(self, reason: str) -> Optional[str]:
+        racers = self.racers
+        if not racers:
+            return None
+        if len(racers) == 1:
+            return _as_sms_code(_safe_call(racers[0].request_sms_code, reason))
+
+        cancel = threading.Event()
+        lock = threading.Lock()
+        winner: dict = {}
+        done = threading.Event()
+
+        def worker(channel: LoginInteraction) -> None:
+            attach = getattr(channel, "attach_cancel", None)
+            if callable(attach):
+                try:
+                    attach(cancel)
+                except Exception:
+                    pass
+            if cancel.is_set():
+                return
+            try:
+                code = channel.request_sms_code(reason)
+            except Exception as error:
+                logging.warning(f"登录交互通道异常，已隔离: {redact_text(error)}")
+                return
+            code = _as_sms_code(code)
+            if not code:
+                return
+            with lock:
+                if winner:
+                    return
+                winner["code"] = code
+            done.set()
+
+        threads = [
+            threading.Thread(target=worker, args=(channel,), daemon=True, name=f"sms-race-{index}")
+            for index, channel in enumerate(racers)
+        ]
+        logging.info(
+            "并行向 %d 个通道索要短信验证码（%s），先到先用。",
+            len(racers),
+            "、".join(type(item).__name__ for item in racers),
+        )
+        for thread in threads:
+            thread.start()
+
+        # 各通道自己带超时，这里只负责「谁先回来」和「全都退出了」两种情况
+        while not done.wait(0.2):
+            if not any(thread.is_alive() for thread in threads):
+                break
+
+        cancel.set()
+        if winner:
+            logging.info("并行取码结束，采用最先返回的通道结果。")
+            return winner["code"]
+        logging.warning("所有通道都没能在限定时间内拿到短信验证码。")
+        return None
+
+
 def build_login_interaction() -> LoginInteraction:
     provider = os.getenv("SGCC_LOGIN_INTERACTION_PROVIDER", "auto").strip().lower()
     if provider in {"", "none", "off", "disabled"}:
         return NoopLoginInteraction()
 
-    interactions: list[LoginInteraction] = []
-    telegram = TelegramLoginInteraction.from_env()
-    if provider in {"auto", "telegram", "both"}:
+    racers: list[LoginInteraction] = []
+    extras: list[LoginInteraction] = []
+
+    # 本机短信中转是可选的私有功能，默认不开：
+    # 必须在 .env 里显式 SGCC_SMS_RELAY_ENABLED=true 才参与，其他人配不到也不会被启用。
+    relay_enabled = _env_flag("SGCC_SMS_RELAY_ENABLED", False) or provider in {
+        "smsrelay",
+        "relay",
+        "local",
+    }
+    if relay_enabled:
+        relay = SmsRelayLoginInteraction.from_env()
+        if relay is not None:
+            racers.append(relay)
+        else:
+            logging.warning("短信中转已启用，但 SGCC_SMS_RELAY_URL 未配置，已忽略。")
+
+    if provider in {"auto", "telegram", "both", "race", "parallel", "smsrelay"}:
+        telegram = TelegramLoginInteraction.from_env()
         if telegram is not None:
-            interactions.append(telegram)
+            racers.append(telegram)
         elif provider in {"telegram", "both"}:
             logging.warning("已启用 Telegram 登录交互，但 Bot Token 或 Chat ID 未完整配置。")
-    if provider in {"auto", "url", "both"} and os.getenv("PUSH_QRCODE_URL", "").strip():
-        interactions.append(UrlLoginInteraction())
 
-    if not interactions:
+    if provider in {"auto", "url", "both", "race", "parallel"} and os.getenv("PUSH_QRCODE_URL", "").strip():
+        extras.append(UrlLoginInteraction())
+
+    if not racers and not extras:
         return NoopLoginInteraction()
-    if len(interactions) == 1:
-        return interactions[0]
-    return CompositeLoginInteraction(interactions)
+    if len(racers) + len(extras) == 1:
+        return (racers + extras)[0]
+    return RacingLoginInteraction(racers, extras)
 
 
 def read_sms_code(interaction: LoginInteraction, reason: str) -> Optional[str]:
@@ -481,3 +774,10 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         return default
     return min(maximum, max(minimum, value))
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on", "y"}

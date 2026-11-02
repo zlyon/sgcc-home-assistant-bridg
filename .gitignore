@@ -178,3 +178,14 @@ data/
 
 # WorkBuddy 项目记忆与本地调试目录
 .workbuddy/
+
+.phptest/
+
+# 自研短信 APK：.build 里有 JDK + Android SDK（好几个 G），dist 是构建产物
+tools/sms-apk/.build/
+tools/sms-apk/dist/
+tools/sms-apk/*.idsig
+# 第三方 APK（SmsForwarder 原包 16M）与随手下的临时包，不入库
+tools/sms-relay/*.apk
+*.apk
+
